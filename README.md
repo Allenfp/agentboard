@@ -100,8 +100,7 @@ The resolved identity is printed before anything is written, so a stale
 $ yamlboard ready --as grigory --paths 'src/api/**'
 nothing is ready.
   every unclaimed card is either blocked or touches a path someone already holds - try without --paths to see why
-  next: yamlboard conflicts
-  next: yamlboard list
+  next: yamlboard conflicts   # who holds what, and for how long
 
 $ yamlboard claim PROD-11 --as grigory --paths 'src/api/cli.py'
   as grigory

@@ -494,11 +494,18 @@ def verb_ready(args: argparse.Namespace, out: Out) -> int:
              cards=model.jsonable(cards), paths=paths)
     if not cards:
         out.fact("nothing is ready.")
-        if paths:
+        # One `next:`, picked by why the list is empty. Two markers read as the
+        # tool having forgotten which one it meant. The empty check comes first:
+        # "every card is blocked or held" on a board with no cards is a lie, and
+        # a board with nothing on it gets `create`, not a pointer at `list`.
+        if not tx.all_cards():
+            out.fact("  next: yamlboard create \"First card\"")
+        elif paths:
             out.fact("  every unclaimed card is either blocked or touches a path "
                      "someone already holds - try without --paths to see why")
-        out.fact("  next: yamlboard conflicts")
-        out.fact(f"  next: yamlboard list")
+            out.fact("  next: yamlboard conflicts   # who holds what, and for how long")
+        else:
+            out.fact("  next: yamlboard list        # every card, blocked ones included")
     return EXIT_OK
 
 
@@ -621,7 +628,7 @@ def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
         out.fact("no conflicts - no two live claims share a path, and no ids collide.")
         return EXIT_OK
     out.fact("")
-    out.fact(f"next: yamlboard conflicts --resolve   # the earliest claim wins, "
+    out.fact("next: yamlboard conflicts --resolve   # the earliest claim wins, "
              "the other is marked overridden")
     return EXIT_USAGE     # reported, not acted on: a CI gate should see this
 

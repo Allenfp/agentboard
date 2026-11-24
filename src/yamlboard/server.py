@@ -328,31 +328,37 @@ class Handler(BaseHTTPRequestHandler):
         return loaded
 
     # -- routes ----------------------------------------------------------- #
+    #
+    # `do_GET` and friends are not our casing to fix: `BaseHTTPRequestHandler`
+    # dispatches on the literal name `do_<METHOD>`, so snake_case would silently
+    # stop routing. Ruff knows the convention and stays quiet, which is why no
+    # suppression comment is needed here — the nine N802 noqa markers that were
+    # here were dead, and a dead suppression is a comment that eventually lies.
 
-    def do_GET(self) -> None:      # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         self._route("GET")
 
-    def do_HEAD(self) -> None:     # noqa: N802
+    def do_HEAD(self) -> None:
         self._route("GET")
 
-    def do_POST(self) -> None:     # noqa: N802
+    def do_POST(self) -> None:
         self._route("POST")
 
     # Verbs there is nothing for still have to be routed, not left to the
     # stdlib, whose answer is ``501`` with a text/html body.
-    def do_PUT(self) -> None:      # noqa: N802
+    def do_PUT(self) -> None:
         self._route("PUT")
 
-    def do_DELETE(self) -> None:   # noqa: N802
+    def do_DELETE(self) -> None:
         self._route("DELETE")
 
-    def do_PATCH(self) -> None:    # noqa: N802
+    def do_PATCH(self) -> None:
         self._route("PATCH")
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
+    def do_OPTIONS(self) -> None:
         self._route("OPTIONS")
 
-    def do_TRACE(self) -> None:    # noqa: N802
+    def do_TRACE(self) -> None:
         self._route("TRACE")
 
     def _for_us(self) -> bool:
@@ -455,7 +461,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(HTTPStatus.REQUEST_TIMEOUT, "request timed out", close=True)
         except (BrokenPipeError, ConnectionResetError):  # pragma: no cover - client vanished
             pass
-        except Exception:  # noqa: BLE001 - never leak internals in a body
+        except Exception:
             self._fail(traceback.format_exc())
 
     def _api_get(self, path: str) -> None:

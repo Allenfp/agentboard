@@ -24,10 +24,36 @@ Issues = "https://github.com/Allenfp/yamlboard/issues"
 yamlboard = "yamlboard.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 yamlboard = ["static/*", "skills/*/*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# Chosen to be clean today, not aspirationally broad: a rule set with 119 open
+# findings is a lint run people learn to ignore. Each entry earns its place.
+# F821 found `Any` used 29 times in `api.py` and never imported — invisible at
+# runtime because `from __future__ import annotations` defers the name, fatal to
+# anything that resolves hints. F841 found a validation computed and dropped.
+# N802 is included and N818/N801 are not: N802 caught a real typo
+# (`...store_is_openeD`), while N818 would rename `ClaimDenied`, `Usage` and
+# `Conflict` and N801 would rename `locked`, which is lowercase deliberately as
+# a context manager. Those names are the published surface of this package.
+select = [
+  "E4", "E7", "E9", "F",   # pycodestyle errors + all of pyflakes
+  "N802",                  # function-name casing
+  "RUF100",                # stale noqa: the only way a noqa becomes a lie
+  "B904",                  # raise ... from inside except: keeps tracebacks useful
+  "PLW1510",               # subprocess.run without an explicit check=
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately run commands that are meant to fail and read the exit code.
+"tests/*" = ["PLW1510"]

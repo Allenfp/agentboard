@@ -23,6 +23,7 @@ list-view sort for every human reading the board.
 from __future__ import annotations
 
 import datetime
+from typing import Any, Callable
 
 from . import model, store
 from .model import ReorderExhausted, ValidationError
@@ -934,7 +935,7 @@ def card_create(tx: Tx, args: dict) -> dict:
     labels = args.get("labels") or []
     if not model.is_list(labels):
         raise BadRequest("labels must be a list")
-    known = {str(l.get("id")) for l in model.labels(tx.doc)}
+    known = {str(lbl.get("id")) for lbl in model.labels(tx.doc)}
     for value in labels:
         if value not in known:
             raise BadRequest(f"label {value!r} is not defined")
@@ -1058,7 +1059,7 @@ def card_update(tx: Tx, args: dict) -> dict:
         values = patch["labels"] or []
         if not model.is_list(values):
             raise BadRequest("labels must be a list")
-        known = {str(l.get("id")) for l in model.labels(tx.doc)}
+        known = {str(lbl.get("id")) for lbl in model.labels(tx.doc)}
         for item in values:
             if not model.is_str(item) or item not in known:
                 raise BadRequest(f"label {item!r} is not defined")
@@ -1074,7 +1075,7 @@ def card_update(tx: Tx, args: dict) -> dict:
     if "links" in patch:
         if patch["links"] and not model.is_list(patch["links"]):
             raise BadRequest("links must be a list")
-        model.set_list(card, "card", "links", [_link(l) for l in (patch["links"] or [])])
+        model.set_list(card, "card", "links", [_link(item) for item in (patch["links"] or [])])
     if "subtasks" in patch:
         if patch["subtasks"] and not model.is_list(patch["subtasks"]):
             raise BadRequest("subtasks must be a list")
@@ -1728,7 +1729,7 @@ def label_create(tx: Tx, args: dict) -> dict:
     name = _need_text(args, "name")
     ident = model.unique_id(
         _wanted_id(args, model.slugify(name, "label")),
-        {str(l.get("id")) for l in model.labels(tx.doc)},
+        {str(lbl.get("id")) for lbl in model.labels(tx.doc)},
     )
     label: dict[str, Any] = {"id": ident, "name": name}
     if args.get("color"):
@@ -1757,7 +1758,7 @@ def label_delete(tx: Tx, args: dict) -> dict:
     for card in tx.all_cards():
         if model.is_map(card) and label["id"] in (card.get("labels") or []):
             model.set_list(card, "card", "labels",
-                           [l for l in card["labels"] if l != label["id"]])
+                           [kept for kept in card["labels"] if kept != label["id"]])
             tx.dirty(card)
             stripped += 1
     tx.doc.get("labels", []).remove(label)

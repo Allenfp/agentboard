@@ -206,7 +206,7 @@ def person_ids(doc: dict) -> set[str]:
 
 
 def labels(doc: dict) -> list:
-    return [l for l in (doc.get("labels") or []) if is_map(l)]
+    return [lbl for lbl in (doc.get("labels") or []) if is_map(lbl)]
 
 
 def custom_fields(board: dict) -> list:
@@ -943,7 +943,6 @@ def validate(doc: Any) -> list[str]:
         errors.append("boards: expected a list")
         board_list = []
 
-    known_people = person_ids(doc)
     board_ids: set[str] = set()
     board_keys: set[str] = set()
     for index, board in enumerate(board_list):
@@ -1047,7 +1046,7 @@ def card_context(doc: dict, board: dict, ids: set[str] | None = None) -> dict:
     return {
         "columns": set(column_ids(board)),
         "people": person_ids(doc),
-        "labels": {l.get("id") for l in labels(doc) if is_str(l.get("id"))},
+        "labels": {lbl.get("id") for lbl in labels(doc) if is_str(lbl.get("id"))},
         "ids": ids,
     }
 

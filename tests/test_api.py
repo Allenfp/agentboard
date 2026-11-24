@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 from typing import Any, Callable
 
-from test_gitops import GIT_ENV, git
+from test_gitops import git
 
 from yamlboard import api, cli, model, store
 from yamlboard.model import ValidationError
@@ -225,7 +225,7 @@ class TestFlushIsAtomic(Ops):
         self.assertEqual(self.new_card("with ticket", fields={"ticket": "T-1"})[-1],
                          str(counter))
 
-    def test_a_malformed_payload_is_refused_before_the_store_is_openeD(self) -> None:
+    def test_a_malformed_payload_is_refused_before_the_store_is_opened(self) -> None:
         before = self.files()
         for payload in ({}, {"op": 42}, {"op": "card.frobnicate"},
                         {"op": "card.create", "args": "nope"}):
@@ -396,7 +396,7 @@ class TestClaims(Ops):
         self.assertIn("holds it", caught.lines[0])
         self.assertEqual(caught.detail["holder"], "ada")
         self.assertEqual(caught.detail["reason"], "taken")
-        self.assertEqual(caught.lines[-1], f"next: yamlboard ready --as grigory")
+        self.assertEqual(caught.lines[-1], "next: yamlboard ready --as grigory")
         self.assertEqual(self.files(), before, "a denial must not touch the store")
 
     def test_a_denial_lists_every_reason_at_once(self) -> None:
@@ -417,7 +417,7 @@ class TestClaims(Ops):
         self.assertIn("ada holds it", body)
         self.assertIn(f"waits on {blocker}", body)
         self.assertIn("zoe claimed docs/**", body)
-        self.assertEqual(caught.lines[-1], f"next: yamlboard ready --as grigory")
+        self.assertEqual(caught.lines[-1], "next: yamlboard ready --as grigory")
 
     def test_re_claiming_your_own_card_with_the_same_paths_writes_nothing(self) -> None:
         """A retry after a lost response must not churn the file.
@@ -472,10 +472,10 @@ class TestClaims(Ops):
                          [(1, 1, ".yamlboard/cards/WEB-1.yaml")],
                          self.card_text(card_id))
         diff = git(self.repo, "diff", "--unified=0")
-        changed = [l for l in diff.splitlines()
-                   if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]
+        changed = [line for line in diff.splitlines()
+                   if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))]
         self.assertEqual(len(changed), 2, diff)
-        self.assertTrue(all("expires" in l for l in changed), changed)
+        self.assertTrue(all("expires" in line for line in changed), changed)
         self.assertEqual(result["expires"],
                          model.iso(T0 + datetime.timedelta(minutes=40)))
         self.assertFalse(result["retaken"])

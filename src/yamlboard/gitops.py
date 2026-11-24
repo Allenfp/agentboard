@@ -195,8 +195,10 @@ def config_value(root: Path, key: str) -> str | None:
     """
     env = {k: v for k, v in os.environ.items() if k not in _DROP_ENV}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # check=False because 1 is a normal answer here, not a failure: it means the
+    # key is unset, which is how "this repo has no user.email" arrives.
     done = subprocess.run(
-        ["git", "config", "--get", key],
+        ["git", "config", "--get", key], check=False,
         cwd=str(root), capture_output=True, text=True,
         stdin=subprocess.DEVNULL, env=env, timeout=GIT_TIMEOUT,
     )
