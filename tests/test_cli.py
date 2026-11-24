@@ -592,7 +592,9 @@ class TestIdentity(Board):
         self.assertNotEqual(code, cli.EXIT_DENIED)
         self.assertIn("'ghost'", err)
         self.assertIn("people", err)
-        self.assertIn("yamlboard list", err)
+        # The hint must name a usable name, not send the reader to a command
+        # that lists cards and has never listed people.
+        self.assertIn("--as ada", err)
         self.assertEqual(self.people(), before,
                          "an unknown agent was added to the board's people")
         self.assertNotIn("claim", self.card(card_id))
@@ -619,7 +621,7 @@ class TestIdentity(Board):
         code, out, err = self.yb("claim", card_id)
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("YAMLBOARD_AGENT", err)
-        self.assertIn("yamlboard list", err)
+        self.assertIn("--as ada", err)
         self.assertEqual(self.people(), before)
         self.assertNotIn("claim", self.card(card_id))
 
@@ -703,8 +705,7 @@ class TestStreams(Board):
         document = json.loads(out)
         self.assertFalse(document["ok"])
         self.assertIn("people", document["error"])
-        self.assertEqual(document["lines"][-1],
-                         "next: yamlboard list   # see this board's people")
+        self.assertIn("--as ada", document["lines"][-1])
         self.assertEqual(out.strip().count("{"), 1, "more than one document")
         # Under --json the document is the only output: `main` deliberately skips
         # the prose echo, so nothing on stderr is ever something a parser has to
@@ -921,6 +922,104 @@ class TestInitIsSafe(Board):
         self.assertEqual(self.store.read_board().doc["version"], model.VERSION)
         self.assertNotIn("rev:", board_file.read_text(encoding="utf-8"),
                          "a global rev counter is back; it caused every conflict")
+
+
+class TestInitSeedsAnIdentity(Board):
+    """A board nobody can claim from is not an empty board, it is a broken one.
+
+    ``people`` is the only allowlist identity is checked against and nothing in
+    the CLI creates a person, so a fresh ``init`` used to produce a store where
+    every single claim failed -- while its own ``next:`` hint printed the name
+    the reader was about to be refused for, and the refusal then pointed at
+    ``yamlboard person add``, a command this tool has never had. The advertised
+    flow had to work, so the identity the run was named with seeds the roster.
+    """
+
+    def fresh(self, name: str) -> Path:
+        """A committed git repo with *no* store and a known ``user.email``."""
+        root = Path(self._tmp.name) / name
+        root.mkdir()
+        git(root, "init", "-q", "-b", "main")
+        git(root, "config", "user.email", "grigory@work.example")
+        git(root, "config", "user.name", "Grigory")
+        git(root, "commit", "-q", "--allow-empty", "-m", "seed")
+        return root
+
+    def test_the_git_identity_becomes_the_first_person(self) -> None:
+        root = self.fresh("git-identity")
+        code, out, err = self.yb("init", "--dir", str(root))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        people = store.Store(root).read_board().doc["people"]
+        self.assertEqual([str(p["id"]) for p in people], ["grigory"])
+        # and the claim the hint just printed must now actually work
+        code, document, err = self.yj("create", "First card", "--dir", str(root))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        code, _, err = self.yb("claim", str(document["id"]), "--dir", str(root),
+                              "--paths", "README.md")
+        self.assertEqual(code, cli.EXIT_OK, f"the advertised flow still fails: {err}")
+
+    def test_an_explicit_name_is_the_one_seeded(self) -> None:
+        """``--as`` outranks git, so a shared laptop's email must not decide who
+        owns a board somebody set up for a specific agent.
+        """
+        root = self.fresh("explicit")
+        code, _, err = self.yb("init", "--dir", str(root), "--as", "ada")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertEqual([str(p["id"]) for p in store.Store(root).read_board().doc["people"]],
+                         ["ada"])
+
+    def test_no_identity_found_is_said_out_loud_rather_than_writing_an_empty_board_quietly(self) -> None:
+        """With nothing to seed, the roster *is* empty and the reader has to be
+        told, because the failure otherwise surfaces two commands later as an
+        identity error with no connection to this one.
+        """
+        root = Path(self._tmp.name) / "anonymous"
+        root.mkdir()
+        git(root, "init", "-q", "-b", "main")
+        git(root, "commit", "-q", "--allow-empty", "-m", "seed")
+        code, out, err = self.yb("init", "--dir", str(root))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertEqual(store.Store(root).read_board().doc["people"], [])
+        self.assertIn("no identity found", out)
+        self.assertIn("--as", out)
+
+    def test_seeding_never_invents_an_identity_under_a_bad_name(self) -> None:
+        """``--as`` is still slug-checked. Seeding writes ``board.yaml``
+        unvalidated by the people allowlist -- there is no allowlist yet -- so
+        the grammar check is the only thing between a typo and a permanently
+        unusable roster entry.
+        """
+        root = self.fresh("unspeakable")
+        code, _, err = self.yb("init", "--dir", str(root), "--as", "Grigory von Hall")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertEqual(store.Store(root).read_board().doc["people"], [],
+                         "a name that is not a slug was written into the roster")
+        self.assertIn("no identity found",
+                      self.yb("init", "--dir", str(self.fresh("again")),
+                              "--as", "Grigory von Hall")[1])
+
+    def test_an_existing_boards_roster_is_never_touched(self) -> None:
+        """``init`` on a board that exists is a no-op, and that includes the
+        people: seeding here would let a stray ``init`` promote whoever typed it
+        onto a team board they have no business editing.
+        """
+        code, out, err = self.yb("init", "--dir", str(self.repo), "--as", "someoneelse")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("left alone", out)
+        self.assertEqual(self.people(), list(self.PEOPLE))
+
+    def test_the_hint_never_advises_a_command_that_does_not_exist(self) -> None:
+        """Every hint on the identity path is something an agent will run
+        verbatim. This one named ``person add`` for a release, and the only real
+        way to add a person is the browser's Settings.
+        """
+        for name in ("api.py", "cli.py"):
+            source = (Path(cli.__file__).parent / name).read_text(encoding="utf-8")
+            self.assertNotIn("yamlboard person", source, name)
+        code, _, err = self.yb("claim", self.create(), "--as", "ghost", "--paths", "x")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("--as ada", err, "the refusal should offer a name that works")
+        self.assertNotIn("person add", err)
 
 
 class TestInspection(Board):
@@ -1160,6 +1259,70 @@ class TestServeExitCodes(Board):
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("--port", err)
 
+    def test_a_refused_public_bind_is_a_usage_error_not_a_traceback(self) -> None:
+        """Binding a writable board to a public interface is refused, and how it
+        fails matters as much as that it does.
+
+        It used to raise ``RuntimeError`` uncaught: a wall of traceback for what
+        is simply a flag asked for the wrong thing, indistinguishable from a
+        crash in our own code, and it exited 1 -- the code reserved for "the
+        machine would not give me the socket, nothing you typed is wrong", which
+        is precisely backwards here. Exit 2 says *fix the invocation*, and the
+        message already names both fixes.
+        """
+        self.stub_loop()
+        code, out, err = self.yb("serve", "--host", "0.0.0.0",
+                                "--port", str(self.free_port()))
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("no auth", err)
+        self.assertIn("--read-only", err)
+
+    def test_a_refused_public_bind_still_answers_under_json(self) -> None:
+        """``--json`` means stdout is always one parseable document, including
+        when the command never started. A caller that scripted the bind check
+        would otherwise get an empty string to parse and no exit status to trust.
+        """
+        self.stub_loop()
+        code, document, err = self.yj("serve", "--host", "0.0.0.0",
+                                      "--port", str(self.free_port()))
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertFalse(document["ok"])
+        self.assertEqual(err, "")
+
+    def test_a_taken_port_answers_under_json_too(self) -> None:
+        """The bind failure the OS reports rather than us. This one exits 1, and
+        that path raised ``SystemExit`` past every emit except ``main``'s, so it
+        printed a bare ``{}``: valid JSON, zero information, and every caller has
+        to special-case the shape.
+        """
+        taken = socket.socket()
+        taken.bind(("127.0.0.1", 0))
+        taken.listen(1)
+        self.addCleanup(taken.close)
+
+        self.stub_loop()
+        code, document, err = self.yj("serve", "--host", "127.0.0.1",
+                                      "--port", str(taken.getsockname()[1]))
+        self.assertEqual(code, cli.EXIT_CANNOT_LISTEN)
+        self.assertFalse(document["ok"])
+        self.assertIn("cannot listen", document["error"])
+
+    def test_a_serving_server_reports_its_own_url_under_json(self) -> None:
+        """The document is the whole reason to script ``serve``: start it, read
+        the port back, talk to it. Emitted before the loop blocks, because
+        stdout is never seen again after that.
+        """
+        self.stub_loop()
+        code, document, err = self.yj("serve", "--host", "127.0.0.1",
+                                      "--port", str(self.free_port()))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertTrue(document["ok"])
+        self.assertTrue(document["url"].startswith("http://localhost:"))
+        # resolved on both sides: `serve` resolves the store it discovered, and
+        # on macOS the temp root arrives as /var/... for /private/var/...
+        self.assertEqual(Path(document["path"]).resolve(), self.store.root.resolve())
+
     def test_a_board_that_is_not_there_is_refused_before_the_port_opens(self) -> None:
         """A dashboard over a board that does not exist would open, look empty,
         and invite a human to type cards that go nowhere.
@@ -1191,6 +1354,101 @@ class TestServeExitCodes(Board):
         code, out, err = self.yb("serve", "--port", str(self.free_port()))
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertIn(str(self.store.root), out)
+
+
+class TestJsonDocumentIsEmittedOnce(unittest.TestCase):
+    """``--json`` promises exactly one document; ``serve`` is where it broke.
+
+    ``serve`` emits before blocking so a scripted caller can read the URL out of
+    a stream it will never see again, and ``main`` emits again for every verb on
+    the way out. Without the guard, stopping the server appended a second object
+    to stdout and every caller's ``json.load`` failed on trailing data.
+    """
+
+    def test_a_second_emit_is_silent(self) -> None:
+        stream = io.StringIO()
+        out = cli.Out(json_mode=True, stream=stream)
+        out.data(ok=True, url="http://localhost:1")
+        out.emit()
+        out.emit()
+        out.emit()
+        text = stream.getvalue()
+        self.assertEqual(text.count("{"), 1, text)
+        self.assertEqual(json.loads(text)["url"], "http://localhost:1")
+
+    def test_the_guard_is_per_run_not_global(self) -> None:
+        """Instance state, deliberately: a class flag would make every command
+        after the first print nothing at all, which is worse than the bug.
+        """
+        for _ in range(2):
+            stream = io.StringIO()
+            out = cli.Out(json_mode=True, stream=stream)
+            out.data(ok=True)
+            out.emit()
+            self.assertEqual(stream.getvalue().count("{"), 1)
+
+    def test_human_mode_prints_no_document_at_all(self) -> None:
+        stream = io.StringIO()
+        out = cli.Out(json_mode=False, stream=stream)
+        out.data(ok=True)
+        out.emit()
+        self.assertEqual(stream.getvalue(), "")
+
+
+class TestComment(Board):
+    """``comment`` exists so the skill's recovery step is a command.
+
+    The operation shipped in the API first and the skill told agents to use it by
+    its op name, which is not something they can run: an agent is pointed at the
+    command line and never at the transport, so a prescribed step with no verb is
+    a dead end it can only fail at while a human wonders why nobody said anything.
+    """
+
+    def test_a_comment_lands_on_the_card_attributed_to_its_author(self) -> None:
+        card_id = self.create()
+        code, out, err = self.yb("comment", card_id, "reverting mine, see src/cache/",
+                                "--as", "ada")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        card = self.store.read_all().card(card_id).doc
+        self.assertEqual([c["text"] for c in card["comments"]],
+                         ["reverting mine, see src/cache/"])
+        self.assertEqual(card["comments"][0]["by"], "ada")
+
+    def test_an_agent_may_not_speak_as_someone_else(self) -> None:
+        """Free text in an attribution field is how a board starts lying about
+        who said what, and comments are the one field read as evidence later.
+        """
+        card_id = self.create()
+        code, _, err = self.yb("comment", card_id, "hi", "--as", "ghost")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("ghost", err)
+        self.assertIsNone(self.store.read_all().card(card_id).doc.get("comments"),
+                        "a refusal still wrote the card")
+
+    def test_commenting_needs_an_identity_rather_than_defaulting_to_none(self) -> None:
+        """An unattributed note on a contested card is worth nothing to the
+        human adjudicating it, so this verb demands what ``create`` forgives.
+        """
+        card_id = self.create()
+        code, _, err = self.yb("comment", card_id, "orphan note")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("no agent", err)
+
+    def test_the_comment_is_one_json_document(self) -> None:
+        card_id = self.create()
+        code, document, err = self.yj("comment", card_id, "note", "--as", "grigory")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertEqual(document["id"], card_id)
+        self.assertEqual(document["count"], 1)
+
+    def test_the_skill_teaches_the_verb_it_needs(self) -> None:
+        """The anti-drift list proves the verb is *declared*; this proves the
+        skill actually tells an agent to run it, which is the whole reason the
+        verb was added.
+        """
+        text = (cli.skill_path().parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("yamlboard comment", text)
+        self.assertNotIn("card.comment", text, "the skill still names the op, not the verb")
 
 
 # --------------------------------------------------------------------------- #
@@ -1265,6 +1523,40 @@ class TestSkillInstall(Board):
         self.assertIn("already current", out)
         self.assertEqual(dirty(self.repo), before,
                          "a no-op install changed the working tree")
+
+    def test_a_missing_agents_block_is_restored_even_when_the_skill_is_current(self) -> None:
+        """The install writes two files and used to check only one of them.
+
+        "Already current" returned early, so deleting just the AGENTS block left
+        a reinstall that reported success, wrote nothing, and still had no block
+        for the runtimes that read AGENTS.md and never look in ``.agents/``. The
+        block is the CLI's own text rather than something a team edits, so it is
+        safe to rewrite on a path where the skill file itself is never touched.
+        """
+        self.assertEqual(self.yb("skill", "install", "--dir", str(self.repo))[0],
+                         cli.EXIT_OK)
+        block = self.dest(self.repo).parent / "AGENTS-block.md"
+        self.assertTrue(block.is_file())
+        block.unlink()
+
+        code, out, err = self.yb("skill", "install", "--dir", str(self.repo))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("already current", out)
+        self.assertTrue(block.is_file(), "the reinstall reported success and restored nothing")
+        self.assertEqual(block.read_text(encoding="utf-8"), cli.AGENTS_BLOCK)
+
+    def test_json_names_the_agents_block_a_script_has_to_paste(self) -> None:
+        """A scripted install cannot read the prose, and stdout is exactly one
+        document, so the block's text cannot go in the payload -- but a caller
+        given no path at all has no way to find the thing it was told to paste.
+        """
+        code, document, err = self.yj("skill", "install", "--dir", str(self.repo))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertTrue(document["written"])
+        named = Path(document["agents_block"])
+        self.assertTrue(named.is_file(), document.get("agents_block"))
+        self.assertEqual(named.read_text(encoding="utf-8"), cli.AGENTS_BLOCK)
+        self.assertEqual(err, "")
 
     def test_path_names_a_real_file_inside_the_installed_package(self) -> None:
         """``skill path`` is how a human verifies which copy a repo will get.
@@ -1418,6 +1710,74 @@ boards:
         code, _, err = self.yb("migrate", str(self.source), "--dir", str(self.repo))
         self.assertEqual(code, cli.EXIT_USAGE, err)
         self.assertEqual(self.store.card_ids(), [], "the refused migrate wrote cards")
+
+    def test_a_second_migrate_never_overwrites_a_card_it_did_not_write(self) -> None:
+        """The one migration failure that cannot be undone.
+
+        ``--force`` merges, and the people and label loops merge by skipping ids
+        already present. Cards used to clobber instead: re-running a migration
+        onto a board that had moved on replaced same-id cards with their v1
+        copies and exited 0. Nothing in git has the newer version -- the store
+        is routinely uncommitted while work is in progress, a card is one file,
+        and there is no diff to notice. Refusing on any id collision is also
+        simply what "migrating twice is refused rather than repeated" means.
+        """
+        first = Path(self._tmp.name) / "target"
+        first.mkdir()
+        self.assertEqual(self.yb("migrate", str(self.source), "--dir", str(first))[0],
+                         cli.EXIT_OK)
+        arrived = store.Store(first)
+        live = arrived.read_card("PROD-1").doc
+        live["title"] = "work done after the migration, never committed"
+        store._write_file(arrived.card_path("PROD-1"), live)
+        retired = arrived.read_card("PROD-6").doc
+        retired["title"] = "retired work rewritten after the migration"
+        store._write_file(arrived.card_path("PROD-6", archived=True), retired)
+
+        code, _, err = self.yb("migrate", str(self.source), "--dir", str(first),
+                               "--force")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("already exist", err)
+        self.assertIn("PROD-6", err,
+                      "an archived card is invisible to the live view and was clobbered")
+        self.assertEqual(arrived.read_card("PROD-1").doc["title"],
+                         "work done after the migration, never committed")
+        self.assertEqual(arrived.read_card("PROD-6").doc["title"],
+                         "retired work rewritten after the migration")
+
+    def test_merging_a_different_files_cards_still_works(self) -> None:
+        """The guard is about ids, not about making ``--force`` useless: pulling
+        a second legacy file into a board that already has cards of its own is
+        the case the flag exists for.
+        """
+        # The fixture's board is keyed WEB, so the second file is rewritten to
+        # that key: a key mismatch is refused by a different guard entirely (it
+        # would orphan every id the store already has), which is not this test.
+        other = Path(self._tmp.name) / "legacy.yaml"
+        other.write_text(self.V1.replace("key: PROD", "key: WEB")
+                         .replace("PROD-1", "WEB-40").replace("PROD-6", "WEB-41"),
+                         encoding="utf-8")
+        code, out, err = self.yb("migrate", str(other), "--dir", str(self.repo),
+                                "--force")
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("2 card(s)", out)
+        self.assertEqual(self.store.read_card("WEB-40").doc["title"], "Ship the API")
+
+    def test_migrating_twice_without_force_is_refused_before_anything_is_read(self) -> None:
+        """A different promise from the one above: that guards a card inside a
+        store you agreed to merge into, this one guards the store itself, and it
+        has to hold even when every id happens to be free.
+        """
+        target = Path(self._tmp.name) / "twice"
+        target.mkdir()
+        self.assertEqual(self.yb("migrate", str(self.source), "--dir", str(target))[0],
+                         cli.EXIT_OK)
+        before = sorted(p.name for p in (target / ".yamlboard" / "cards").iterdir())
+        code, _, err = self.yb("migrate", str(self.source), "--dir", str(target))
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("--force", err)
+        self.assertEqual(sorted(p.name for p in (target / ".yamlboard" / "cards").iterdir()),
+                         before)
 
 
 class TestRealProcess(Board):

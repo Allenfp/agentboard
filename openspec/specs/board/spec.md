@@ -34,11 +34,15 @@ closed: a key the build does not know makes the file unreadable.
 - **THEN** the request is refused with the offending path and the file on disk is byte-identical to before
 
 ### Requirement: Columns are defined by the file
-Each board SHALL define its own columns with id, name, colour, order, an optional
-per-column `wip_limit`, and an optional `is_done` flag. Column order in the file
-SHALL be column order on screen. A column header SHALL flag itself when its card
-count exceeds `wip_limit`. Dropping a card into an `is_done` column SHALL offer to
-archive it.
+Each board SHALL define its own columns with `id`, `name`, `color`, an optional
+`wip_limit`, and an optional `is_done` flag. A column's position is its index in
+the `columns` array, so reordering columns rewrites the board file. A column
+header SHALL flag itself when its card count exceeds `wip_limit`. Dropping a card
+into an `is_done` column SHALL offer to archive it.
+
+#### Scenario: A column carries no order key
+- **WHEN** a column is written with an `order:` key
+- **THEN** it is refused as an unknown key, because the array index is the order and two sources of it would disagree
 
 #### Scenario: Over the WIP limit
 - **WHEN** a fourth card is dropped into a column with `wip_limit: 3`
@@ -56,14 +60,20 @@ SHALL be stored exactly as typed, with no renderer.
 - **WHEN** a board marks a custom field `required: true` while existing cards lack it
 - **THEN** new cards must carry a value and existing cards keep theirs without being rewritten
 
-### Requirement: Card order is array order
-A card's position within its column SHALL be its index in the board's `cards`
-array, with no separate position field. A drop SHALL preserve the target position.
-Moving a card to a different board SHALL re-key it to that board's `key` prefix.
+### Requirement: Card order is a number on the card
+A card's position within its column SHALL be a float `order` field on the card
+itself. There is no shared `cards` array. A drop SHALL place the card where it was
+aimed, and a move that runs out of room between two neighbours SHALL renumber the
+column rather than fail. Moving a card to a different board SHALL re-key it to
+that board's `key` prefix.
 
-#### Scenario: A reorder moves the block
+#### Scenario: Why not a shared array
+- **WHEN** two people reorder the same stretch of a column in two clones
+- **THEN** each writes only the card it moved, and git merges the two without a conflict
+
+#### Scenario: A reorder touches one file
 - **WHEN** a card is dragged to the top of its column
-- **THEN** its whole YAML block moves in the file and no `order:` line appears
+- **THEN** only that card's file changes, and it carries an `order:` below every other card in the column
 
 ### Requirement: Card identifiers
 Card ids SHALL be `KEY-NN`, where `KEY` is the board's 2–8 capital-letter prefix.

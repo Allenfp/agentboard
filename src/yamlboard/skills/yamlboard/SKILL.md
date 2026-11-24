@@ -2,7 +2,7 @@
 name: yamlboard
 description: Coordinate work in a repo that has a .yamlboard/ directory — claim a card before editing it, declare the paths you will touch, and release when done. Use when starting work in such a repo, when asked what to work on, or before touching a file another agent may hold.
 metadata:
-  commands: [init, serve, create, check, show, list, ready, claim, renew, release, done, dep, conflicts, migrate, skill]
+  commands: [init, serve, create, check, show, list, ready, claim, renew, release, done, dep, comment, conflicts, migrate, skill]
 ---
 
 # yamlboard
@@ -37,8 +37,10 @@ git pull --ff-only                    # your card file and their card file are d
 and `yours` are the only two you may start work in.
 
 `--paths` is a promise about files, so name files (`src/api/routes.py`) or a tree
-(`src/api/**`). A bare directory is refused: `src/api` silently means 41 files and
-holds work off the board that you were never going to touch.
+(`src/api/**`). A bare directory is refused: `src/api` silently holds every file under
+it off the board, including ones you were never going to touch. Name a file that does
+not exist yet when you are the one about to write it — that is allowed, and is usually
+the point of the card.
 
 ## Exit codes
 
@@ -64,7 +66,9 @@ A claim expires. Default 30 minutes, or the board's `lease_ttl` — read
 `.yamlboard/board.yaml`. Choose deliberately: `--ttl 30s` on a card you are about to
 work for an hour is a claim you do not really hold, and the moment it lapses another
 agent may take the card out from under you. `renew` before anything long, not after.
-`claim` and `renew` take `--ttl 90s|5m|2h|1d`, clamped to 30s–24h.
+`claim` and `renew` take `--ttl 90s|5m|2h|1d`. Outside 30s–24h it is refused, not
+quietly clamped: a typo like `100d` should stop the command, not silently become
+something you did not ask for.
 
 When a lease lapses it is simply not a claim any more: the card returns to `ready`, and
 whoever takes it records `preempted: <you>`.
@@ -77,10 +81,12 @@ The winner is the earlier `at`, not the better claim — your work is not necess
 wrong.
 
 Stop. Run `yamlboard show <card>`. If you already wrote code, do not delete it and do
-not overwrite the winner's: say so in a `card.comment` on the card, naming what you
-changed and where, and let the human adjudicate.
+not overwrite the winner's: leave a note on the card naming what you changed and where,
+so the human can adjudicate with the whole picture. Do not edit the card's fields —
+the winner's claim is theirs to release.
 
 ```bash
+yamlboard comment PROD-3 "stale session cache: 4 files under src/cache/, reverting mine" --as grigory
 yamlboard conflicts            # read-only
 yamlboard conflicts --resolve  # writes overridden_by; a human decision, not yours
 ```
@@ -96,13 +102,8 @@ yamlboard conflicts --resolve  # writes overridden_by; a human decision, not you
 
 ## AGENTS.md
 
-Paste this into the repo's `AGENTS.md` so agents that never read `.agents/skills/` still
-find the protocol:
-
-```markdown
-## yamlboard
-
-This repo's work is coordinated through `.yamlboard/`. Before editing any file, read
-`.agents/skills/yamlboard/SKILL.md` and claim a card. Never edit a file inside a path
-another agent has claimed.
-```
+`yamlboard skill install` prints the block to paste into the repo's `AGENTS.md`
+and saves it to `.agents/skills/yamlboard/AGENTS-block.md`. Use that text
+verbatim: it is the copy the CLI owns and the tests check. Do not word your own —
+a second hand-written block drifts from the protocol within a release, and an
+agent following the stale one believes it complied.

@@ -234,6 +234,12 @@ class Tx:
 
         board = self.doc
         written: list[str] = []
+        # A cross-board move is a rename, and it arrives as both `remove(old)`
+        # and `_renamed`, so two loops unlinked the same path: the second raised
+        # `NotFound` after the card was already gone from disk and before its
+        # replacement was written -- a deleted card and a traceback where the
+        # board used to be. The rename owns its own removal.
+        renamed_from = {old for old, _ in self._renamed}
         # one lock for the whole plan: `locked` is re-entrant, so the per-write
         # locks inside the store helpers cost nothing here but the gap between
         # them would let another process mint an id we are about to reuse
@@ -241,15 +247,17 @@ class Tx:
             stale = self._stale()
             if stale:
                 raise Conflict(stale)
-            for card_id in sorted(self._removed):
+            for card_id in sorted(self._removed - renamed_from):
                 self.store.remove_card(card_id)
                 written.append(card_id)
-            for old, new in self._renamed:
-                self.store.remove_card(old)
-                written.append(new)
             for card_id, card in sorted({**self._extra, **self._dirty_cards}.items()):
                 self.store.write_card(card, board=board)
                 written.append(card_id)
+            # last, so a rename is never a moment where the card exists nowhere:
+            # the brief overlap of two files is recoverable, an empty gap is not.
+            for old, new in self._renamed:
+                self.store.remove_card(old)
+                written.append(new)
             if self.board_dirty:
                 self.store.write_board(board)
                 self.snapshot.board = self.store.read_board()
@@ -378,9 +386,14 @@ def _person_arg(tx: Tx, args: dict, name: str = "assignee") -> str:
         raise ClaimDenied([f"{name} {ident!r} is not a slug like 'grigory'"],
                           {"reason": "bad_agent"})
     if ident not in known:
+        # The advice has to be a command that exists. This used to name a
+        # person-adding verb the tool has never had: adding people is
+        # deliberately a human act (see identity.py), reachable from the board's
+        # Settings, so a claim can never widen its own allowlist.
         raise ClaimDenied(
             [f"{name} {ident!r} is not one of this board's people"
-             + (f" ({', '.join(known)})" if known else " — add it with 'yamlboard person add'")],
+             + (f" ({', '.join(known)})" if known
+                else " (the board lists none: a person must add it in Settings)")],
             {"reason": "unknown_agent", "known": known},
         )
     return ident
@@ -1106,11 +1119,11 @@ def card_delete(tx: Tx, args: dict) -> dict:
 
 
 def card_move(tx: Tx, args: dict) -> dict:
-    """Move a card to ``column`` before ``before`` (or to the end).
+    """Move a card to ``column`` in front of ``before`` (or to the end).
 
-    Position is a number on the card, so this rewrites one file — which is the
-    point. Today a drag relocated the card's whole block in a shared array, so
-    two people reordering the same stretch always conflicted in git.
+    Position is a number on the card, so a drag rewrites one file: a drag used to
+    relocate the card's whole block in a shared array, which meant two people
+    reordering one stretch always conflicted in git.
     """
     card_id = str(_need(args, "id"))
     card = tx.card(card_id)
@@ -1125,18 +1138,40 @@ def card_move(tx: Tx, args: dict) -> dict:
         if any(str(c.get("id")) == f"{target_key}-{card_id.split('-')[-1]}" for c in tx.all_cards()):
             raise BadRequest(f"{target_key}-{card_id.split('-')[-1]} already exists")
 
+    # Already sorted by `tx.cards()`; the moved card is excluded so the gap is
+    # computed against the column as it will read afterwards.
     neighbours = [c for c in tx.cards()
                   if c.get("column") == column_id and c.get("id") != card_id
                   and model.board_for_card(tx.doc, str(c.get("id") or "")) is target]
     before = args.get("before")
-    anchor = next((c for c in neighbours if c.get("id") == before), None)
-    if before and not anchor and neighbours:
-        anchor = neighbours[-1]
-    try:
-        order = (model.order_between(anchor, None) if anchor
-                 else float(model.ORDER_GAP))
-    except ReorderExhausted:
-        order = None            # the column is renumbered after the move lands
+    # `before` names the card the moved one goes in FRONT of: that is what a drag
+    # means, since the drop hint is drawn above a card, and it is what the word
+    # says. It was read as the predecessor -- `order_between(anchor, None)` lands
+    # one slot after its anchor -- so every drag into the middle of a column
+    # landed one place below the gap the reader aimed at, and a drop above the
+    # last card silently appended.
+    if before and str(before) == card_id and not cross:
+        # "Put X in front of X" asks for no movement, and the card is excluded
+        # from `neighbours` so it would otherwise resolve to no-target and take
+        # the append below -- a silent trip to the bottom of the column. Leaving
+        # `order` None writes no position field, which is the one reading that
+        # cannot misplace anybody.
+        order = None
+    else:
+        index = next((i for i, c in enumerate(neighbours)
+                      if c.get("id") == str(before)), None) if before else None
+        if index is None:
+            # No target named, or the named card has gone (deleted, or moved
+            # column between the drag and the write). Appending is the only
+            # fallback that cannot misplace somebody else's card.
+            left, right = (neighbours[-1] if neighbours else None), None
+        else:
+            left = neighbours[index - 1] if index > 0 else None
+            right = neighbours[index]
+        try:
+            order = model.order_between(left, right)
+        except ReorderExhausted:
+            order = None        # the column is renumbered after the move lands
 
     card["column"] = column_id
     if order is not None:

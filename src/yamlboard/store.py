@@ -2,13 +2,21 @@
 
 A store is a directory inside the repository it coordinates: ``board.yaml`` for
 the rare board-level edits, ``cards/<ID>.yaml`` for one card per file, and
-``archive/<ID>.yaml`` for retired cards. The split is the whole point — a card
-write touches exactly one path, so git's own merge is the concurrency control
-for unrelated work and there is no shared byte for two agents to contend over.
+``archive/<ID>.yaml`` for retired cards. The split is the whole point — *editing*
+a card touches exactly one path, so git's own merge is the concurrency control for
+unrelated work and there is no shared byte for two agents to contend over.
+
+Creating a card is the exception, and the weakness this module accepts on purpose:
+the id has to come from somewhere, so ``next_card`` moves in ``board.yaml`` beside
+the new card file. Two clones creating from one commit mint the same id and collide
+in both paths. A per-clone suffix would end that and cost every card the readable
+``WEB-7``; the counter is cheap to dodge (pull before you create) and ``conflicts``
+names the pair when someone forgets. Do not "fix" it by moving the counter into a
+card file, which only relocates the contended byte.
 
 ruamel's round-trip loader keeps every file a human artefact: comments, key order
 and block scalars survive a save made by the browser. Writes go to a sibling temp
-file and ``os.replace``, so a crash cannot truncate a card. The one deliberate
+file and ``os.replace``, so a crash cannot truncate a card. The deliberate
 simplification: card files carry no comments to preserve (they are coordination
 state an agent writes), while ``board.yaml`` — the file a human reviews in a pull
 request — keeps the adaptive indent the single-file store used.
@@ -28,6 +36,7 @@ import re
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -52,6 +61,16 @@ ARCHIVE_DIR = "archive"
 LOCK_NAME = ".lock"
 TEMP_PREFIX = ".tmp-"
 TEMP_SUFFIX = ".yaml"
+
+IGNORE_NAME = ".gitignore"
+# Patterns are relative to this file, so no `**/` here — the store's own ignore
+# covers exactly the two per-machine artefacts written beside it.
+IGNORE_BODY = (
+    "# yamlboard runtime scratch — written by yamlboard, never board state.\n"
+    "# The directory itself is tracked: it IS the board.\n"
+    f"{LOCK_NAME}\n"
+    f"{TEMP_PREFIX}*{TEMP_SUFFIX}\n"
+)
 
 
 class StoreError(Exception):
@@ -462,7 +481,8 @@ class Store:
 
     # -- creation ------------------------------------------------------------ #
 
-    def create(self, title: str = "Board", *, key: str | None = None) -> "Snapshot":
+    def create(self, title: str = "Board", *, key: str | None = None,
+               people: Sequence[str] = ()) -> "Snapshot":
         """Write a valid starter store. Refuses if one is already there.
 
         Refusing rather than merging is the whole safety story for ``init``: an
@@ -473,12 +493,40 @@ class Store:
             raise StoreError(f"{self.root} already holds a board - not overwriting it")
         self.cards_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
-        doc = new_board(title, key=key)
+        doc = new_board(title, key=key, people=people)
         errors = model.validate(doc)
         if errors:
             raise ValidationError(errors)
         _write_file(self.board_path, doc)
+        self.write_ignore()
         return self.read_all()
+
+    def write_ignore(self) -> bool:
+        """Seed ``.yamlboard/.gitignore`` so the lock never reaches git.
+
+        The store writes two per-machine artefacts inside itself: the advisory
+        flock and the scratch of a save killed mid-write. Neither is board state,
+        and a clone that carries a 0-byte ``.lock`` in its history has that
+        mistake forever.
+
+        They are ignored by a file the store owns rather than by the repository's
+        root ``.gitignore``: the board gets committed into somebody else's repo,
+        and editing that repo's root file unasked is not ours to do. A nested
+        ``.gitignore`` travels with the directory, so ``git add .`` is safe in
+        every consuming repo including ones that have never heard of yamlboard —
+        and without it the Commit button refuses, because its own ``git add``
+        stages the lock and then the foreign-file guard rightly sees a file it
+        did not put there.
+
+        Returns True when the file was created, False when one is already there:
+        an owner who has narrowed or widened these rules keeps theirs.
+        """
+        path = self.root / IGNORE_NAME
+        if path.exists():
+            return False
+        path.write_text(IGNORE_BODY, encoding="utf-8")
+        _fsync_dir(path.parent)
+        return True
 
 
 def _read_file(path: Path, validate: Callable[[dict], list[str]] | None) -> File:
@@ -562,13 +610,20 @@ def _ordered(files: list[File]) -> list[File]:
 # skeletons
 # --------------------------------------------------------------------------- #
 
-def new_board(title: str = "Board", *, key: str | None = None) -> dict:
-    """A valid one-board store: enough columns to work in, nothing else."""
+def new_board(title: str = "Board", *, key: str | None = None,
+              people: Sequence[str] = ()) -> dict:
+    """A valid one-board store: enough columns to work in, nothing else.
+
+    ``people`` is the starting roster, and the caller decides whether it has one.
+    An empty roster is not a broken board — it is a board whose humans have not
+    been named yet — but a board nobody can claim from is, so ``init`` passes the
+    identity it was invoked with. See :func:`yamlboard.cli.verb_init`.
+    """
     key = (key or model.board_key(title)).upper()
     return {
         "version": model.VERSION,
         "title": title,
-        "people": [],
+        "people": [{"id": str(pid), "name": str(pid)} for pid in people],
         "labels": [],
         "boards": [{
             "id": model.slugify(title, "board"),

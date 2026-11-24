@@ -39,18 +39,23 @@ yamlboard init --title Web --key WEB
 
 ```
 created /home/you/my-repo/.yamlboard
-  board.yaml, cards/, archive/
+  board.yaml, cards/, archive/, .gitignore
 
+  people: allen (you; add the rest in the board's Settings)
 next:
-  yamlboard create "First card" --as <you>
+  yamlboard create "First card" --as allen
   yamlboard skill install     # teach agents in this repo the protocol
 ```
 
 `init` refuses to overwrite an existing store, because an overwritten board is
 unrecoverable and "already initialised" costs you one confused second.
 
-A fresh board lists no people, so nothing on it can be claimed — nobody is
-allowed to hold anything. Add yourself to `.yamlboard/board.yaml`:
+It also lists whoever it was named as — here `allen`, from
+`git config user.email`, or whoever you passed to `--as`. That is not a
+convenience: a board with an empty `people` list is one nothing can ever be
+claimed from, and no other command adds people, because letting a claim widen
+the list it is checked against is exactly what the list is there to prevent.
+Add teammates in the board's Settings, or by hand in `.yamlboard/board.yaml`:
 
 ```yaml
 people:
@@ -80,9 +85,14 @@ board fills up with cards nobody can take.
 
 ## The agent loop
 
-Every mutating verb takes `--as <name>`; set `$YAMLBOARD_AGENT` once per shell
-and it is assumed. The name must already be in `people` — an identity nobody
-recognises surfaces weeks later in a `git blame`, so yamlboard never invents one.
+Every verb that acts on a claim takes `--as <name>`; set `$YAMLBOARD_AGENT` once
+per shell and it is assumed. The name must already be in `people` — an identity
+nobody recognises surfaces weeks later in a `git blame`, so no verb invents one
+mid-board. `init` is the exception it has to be: a new board lists nobody, and a
+board with an empty `people` list can never be claimed from, so `init` seeds the
+roster with whoever it was named as and says so. Add the rest in the board's
+Settings — a claim cannot widen the list it is being checked against.
+
 The resolved identity is printed before anything is written, so a stale
 `$YAMLBOARD_AGENT` in a script is caught rather than committed.
 
@@ -105,10 +115,13 @@ claimed PROD-11 as grigory until 2026-11-24T03:13:38
   next: renew before anything long - yamlboard renew PROD-11
 ```
 
-A refusal is four lines and the last one is always a command you can run, naming
-you. That is the whole design: a terse `denied` is what sends an agent back to
-retry the same claim in a loop. The denial went to stderr; with `--json` you get
-one document on stdout instead and nothing else.
+A refusal lists every reason, not the first one it found, and its last line is
+always a command you can run, naming you. That is the whole design: a terse
+`denied` is what sends an agent back to retry the same claim in a loop. How many
+lines it takes depends on how many things are wrong — a taken card whose paths
+also collide is three, a blocker-only refusal is two — so nothing should count
+them. The denial went to stderr; with `--json` you get one document on stdout
+instead and nothing else.
 
 `show` answers "can I take this, and if not why" in one call, and is a useful
 pre-flight because it exits 3 for the same reason `claim` would:
@@ -165,7 +178,7 @@ list-view sort lie. `renew` legitimately changes exactly one line:
 ### Verbs
 
 `init` `serve` `create` `check` `show` `list` `ready` `claim` `renew` `release`
-`done` `dep` `conflicts` `migrate` `skill`. Every one takes `--json`: one
+`done` `dep` `comment` `conflicts` `migrate` `skill`. Every one takes `--json`: one
 document, `indent=2`, on stdout, with no prose around it. The store is found by
 walking up from the current directory (`--dir` overrides), so any verb works from
 anywhere inside the repository, and none of them starts or needs a server.
@@ -209,16 +222,20 @@ files and are checked against each other.
                     next_card, lease_ttl. No cards, no rev.
   cards/WEB-3.yaml  one card per file, id == filename stem
   archive/WEB-9.yaml retired cards (a move is a rename: one clean diff)
+  .gitignore        tells git to ignore the two lines below — `init` writes it
   .lock             advisory flock, gitignored
   .tmp-a1b2c3.yaml  write scratch, gitignored
 ```
 
-`version: 2`. There is no `rev:` counter and no whole-file token. A card write
-touches exactly one path, which is what makes git the good collaborator it was
-always supposed to be: two agents finishing two cards edit two files and merge
-without anyone's help. `yamlboard migrate OLD_FILE` imports a v1 single-file
-board; there is no v1 reader and no compatibility shim — a silently misread board
-is worse than a loud refusal naming `migrate`.
+`version: 2`. There is no `rev:` counter and no whole-file token. Editing a card
+touches exactly one path — the card's own file — which is what makes git the good
+collaborator it was always supposed to be: two agents finishing two cards edit two
+files and merge without anyone's help. *Creating* a card touches two, because the
+board's `next_card` counter moves with it, so two clones creating from the same
+commit mint the same id and collide in both files. That is why the loop pulls
+before you create and not only before you claim. `yamlboard migrate OLD_FILE`
+imports a v1 single-file board; there is no v1 reader and no compatibility shim — a
+silently misread board is worse than a loud refusal naming `migrate`.
 
 `board.yaml`, trimmed to one board and three columns, with the end-of-line notes
 added for reading; the fixture's own file is `examples/demo/.yamlboard/board.yaml`.
@@ -402,9 +419,11 @@ card as the selected agent · `r` ready filter · `a` archive view · `b`/`l` bo
 or list view · `d` card density · `f` filters · `s` settings · `t` theme · `?` all
 shortcuts · `Esc` close. Drag a card to move it; drop order is written to the file.
 
-Screenshots are not included: the PNGs in `docs/` show the v1 single-file board
-and were removed from this README rather than kept as a picture of something that
-no longer exists. They need regenerating from the demo store.
+There are no screenshots. The v1 board's PNGs were deleted rather than left as a
+picture of something that no longer exists, and nothing in this repo generates
+them, so the demo store above is the tour: `cp -r examples/demo/.yamlboard ./ &&
+yamlboard serve` shows the claims, the ticking leases and the conflict control in
+a browser in about ten seconds.
 
 ## Teach the agents
 
@@ -464,11 +483,14 @@ Two things to get right:
 - **Do not** commit real data to a fork of this repo. Public code plus a private
   data repo makes a leak impossible by construction; a private fork of the code
   makes every `git remote add public …` a mistake waiting to happen.
-- The `.gitignore` here ignores only two things — `**/.yamlboard/.lock` and
-  `**/.yamlboard/.tmp-*.yaml` — because the board itself must be tracked or a
-  clone arrives unable to tell who holds what. Copy those two lines verbatim, not
-  a pattern that matches the directory; `git check-ignore -v
-  .yamlboard/board.yaml` printing nothing is the proof a pattern is right.
+- You do not have to add anything to your `.gitignore`. `init` writes
+  `.yamlboard/.gitignore`, which ignores the lock and the write scratch and
+  nothing else — the board itself must stay tracked, or a clone arrives unable
+  to tell who holds what. The rule lives inside the directory so a board dropped
+  into a repo that has never heard of yamlboard keeps itself clean; the one job
+  left for you is not to widen it to `.yamlboard*`, which untracks the board
+  silently. `git check-ignore -v .yamlboard/board.yaml` printing nothing is the
+  proof a pattern is right.
 
 ## How it works
 

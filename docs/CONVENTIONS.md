@@ -16,8 +16,9 @@ not a defect.
 
 - **P1** Every module opens with a banner docstring that says *why* the module
   exists and names the one weakness it accepts on purpose — not what it
-  contains. `store.py` says a card write touches one path so git's merge is the
-  concurrency control, and that card files carry no comments to preserve;
+  contains. `store.py` says editing a card touches one path so git's merge is the
+  concurrency control, names `next_card` as the byte that breaks on create, and
+  says card files carry no comments to preserve;
   `server.py` says every poll re-parses every card and why a cache would lie;
   `identity.py` says identity is honour-system by choice. Length is whatever
   that takes (8–25 lines now); a banner that only inventories the file has told
@@ -131,7 +132,7 @@ not a defect.
   list row has no `--prio` ancestor, a card tile always does, and a fallback on
   the tile would silently turn a stripe-less card into a striped one on hover.
   `--lane` and `--prio-*` are read from JS (`gridTemplateColumns`,
-  `priorityColor`), so "unused in CSS" does not mean unused. A fifth property
+  `priorityColor`), so "unused in CSS" does not mean unused. A sixth property
   has to be added to this list in the same commit that sets it, or the next
   person deletes it as dead code and the claim colour goes with it.
 - **P30** kebab-case class names; state is an extra class (`.on`, `.over`,
@@ -148,15 +149,24 @@ not a defect.
 These break silently, which is the whole reason they are written down.
 
 - **Artefacts.** The board is tracked now: `.yamlboard/` *is* the coordination
-  data, and a clone that arrived without it cannot tell who holds what. So
-  `.gitignore` may ignore only the two per-machine artefacts — `.lock` and
-  `.tmp-*.yaml`, both inside the store directory, both matched at any depth so
-  `examples/demo/` behaves like a real store. A pattern like `.yamlboard*`
-  untracks the board and the demo silently, and `git check-ignore -v
-  .yamlboard/board.yaml` returning a match is the symptom. Rename an artefact
+  data, and a clone that arrived without it cannot tell who holds what. Two
+  per-machine artefacts sit inside it — `.lock` and `.tmp-*.yaml` — and both are
+  ignored from a `.gitignore` **the store owns**: `init` seeds one inside
+  `.yamlboard/` (`store.IGNORE_BODY`), and this repo additionally carries
+  `**/.yamlboard/.lock` and `**/.yamlboard/.tmp-*.yaml` at its root so a store
+  created before that rule, and `examples/demo/`, stay honest without re-running
+  `init`. The nested file is what makes the board safe to drop into a repo that
+  has never heard of yamlboard: editing a host repo's root `.gitignore` unasked
+  is not ours to do, and without the rule `git add .` commits a 0-byte lock and
+  the Commit button then refuses on its own foreign-file guard. A pattern like
+  `.yamlboard*` untracks the board and the demo silently, and `git check-ignore
+  -v .yamlboard/board.yaml` returning a match is the symptom. Rename an artefact
   in `store.py` (`LOCK_NAME`, `TEMP_PREFIX`, `TEMP_SUFFIX`) and you edit
-  `.gitignore`, this bullet, and the README's "Private boards" note that tells
-  people which lines to copy, in the same commit.
+  `IGNORE_BODY`, this repo's root `.gitignore`, this bullet, and the README's
+  "Private boards" note that tells people which lines to copy, in the same
+  commit — `TestQuietWrites::test_the_lock_and_the_scratch_are_the_two_ignored_names`
+  pins the root file and
+  `TestCreation::test_create_ignores_its_own_scratch_inside_the_store` the nested one.
 - **Tokens.** `rev` is gone. The client sends `tokens` — a per-file opaque
   `mtime_ns-size` stamp from `api.tokens_of`, keyed `"board"` or by card id —
   and `Tx.flush` refuses to write any file whose bytes moved since. A whole-store
@@ -203,10 +213,13 @@ These break silently, which is the whole reason they are written down.
   move — a fixture that a first `serve` reflows turns a reader's `git status`
   dirty before they have done anything. Its hand-written leases are timestamps
   and will expire; that is expected and is *why* `conflicts` has something to
-  report out of the box. The screenshots in `docs/` are checked-in artefacts
-  with no generator in the repo: if they cannot be regenerated faithfully,
-  delete them and the README lines that point at them, rather than ship a
-  picture of a board that no longer exists.
+  report out of the box. There are **no screenshots** in this repo: the v1 PNGs
+  went with the orphan rewrite and there is no generator. The rule is what
+  happens if anyone adds some — a screenshot is a checked-in artefact with
+  nothing keeping it honest, so either regenerate all of them from the demo
+  store in the same commit that changes the UI, or delete them and every README
+  line that points at them. A picture of a board that no longer exists is worse
+  than no picture.
 
 ## Coordination
 
@@ -263,13 +276,13 @@ like the rest, because each of them has a second and third copy elsewhere.
   scope prefix only when the change is genuinely narrow (`docs:`, `dark theme:`).
 - **P34** Body: `-` bullets, what *and* why, naming the mechanism. An incidental
   regression gets a `Fixes:` bullet.
-- **P35** `gitops.py` is a convention, not a sandbox. Seven fixed argv lists, no
+- **P35** `gitops.py` is a convention, not a sandbox. Eight fixed argv lists, no
   shell, writes scoped to the `.yamlboard/` directory — but a repo you did not
   write can still steer git, so: `core.fsmonitor=false` on every call (plain
   `git status` executes it), `GIT_OPTIONAL_LOCKS=0` for read-only calls,
   `GIT_CONFIG_NOSYSTEM=1`, and ambient
   `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` cleared from the environment.
-  Six of the seven go through `_run` and therefore `_env()`. The seventh is
+  Seven of the eight go through `_run` and therefore `_env()`. The eighth is
   `config_value`, which reads the *user's own* global config to answer "whose
   email is this" for the identity fallback, and `_env` points
   `GIT_CONFIG_GLOBAL` at `/dev/null` — precisely to make a hostile repository

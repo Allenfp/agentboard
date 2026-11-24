@@ -1080,6 +1080,66 @@ class TestCreation(Base):
         self.assertEqual(snapshot.doc["boards"][0]["key"], "FIN")
         self.assertEqual(self.temps(fresh), [])
 
+    def test_create_ignores_its_own_scratch_inside_the_store(self) -> None:
+        """A board lands in somebody else's repo, so it has to keep itself clean.
+
+        ``.lock`` and ``.tmp-*.yaml`` are written beside ``board.yaml`` and are
+        not board state. A repo that never heard of yamlboard has no rule for
+        them, so ``git add .`` sweeps a 0-byte lock into the commit, and the
+        board's own Commit button then refuses: its ``git add`` stages the lock,
+        and the foreign-file guard correctly sees a file it did not put there.
+        The store ships the rule inside ``.yamlboard/`` rather than editing the
+        host repo's root ``.gitignore`` unasked, so the fix travels with the
+        board and cannot be lost by a clone.
+        """
+        fresh = store.Store(self.dir / "tenant")
+        fresh.create("Imported", key="IMP")
+        repo = self.dir / "tenant-repo"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@example.com")
+        git(repo, "config", "commit.gpgsign", "false")
+        shutil.copytree(fresh.root, repo / store.Store.DIRNAME)
+
+        ignore = repo / store.Store.DIRNAME / store.IGNORE_NAME
+        self.assertTrue(ignore.is_file(), "init wrote no ignore rule of its own")
+        with store.locked(repo / store.Store.DIRNAME):
+            pass
+        scratch = repo / store.Store.DIRNAME / f"{store.TEMP_PREFIX}z{store.TEMP_SUFFIX}"
+        scratch.write_text("scratch\n", encoding="utf-8")
+        self.addCleanup(scratch.unlink, True)
+
+        staged = git(repo, "add", "-A", "--", store.Store.DIRNAME)
+        listed = git(repo, "diff", "--cached", "--name-only").split()
+        self.assertIn(f"{store.Store.DIRNAME}/{store.BOARD_FILE}", listed)
+        self.assertNotIn(f"{store.Store.DIRNAME}/{store.LOCK_NAME}", listed,
+                         f"`git add` staged the lock; a commit records it forever: {staged}")
+        self.assertNotIn(f"{store.Store.DIRNAME}/{store.TEMP_PREFIX}z{store.TEMP_SUFFIX}", listed)
+        for path, ignored in ((f"{store.Store.DIRNAME}/{store.LOCK_NAME}", True),
+                              (f"{store.Store.DIRNAME}/{store.BOARD_FILE}", False),
+                              (f"{store.Store.DIRNAME}/cards/x.yaml", False)):
+            done = subprocess.run(["git", "check-ignore", "-q", path], cwd=str(repo),
+                                  capture_output=True, text=True,
+                                  env={**os.environ, **GIT_ENV})
+            self.assertEqual(done.returncode == 0, ignored, f"wrong rule for {path}")
+
+    def test_an_existing_ignore_rule_of_ones_own_is_left_alone(self) -> None:
+        """A narrowed rule the owner wrote is theirs to keep.
+
+        Rewriting it on every init would silently undo a deliberate choice —
+        un-ignoring the scratch to debug a killed save, say — and it would put a
+        diff in a working tree that changed nothing else.
+        """
+        fresh = store.Store(self.dir / "owner")
+        fresh.root.mkdir(parents=True)
+        (fresh.root / store.IGNORE_NAME).write_text("# keep the lock visible\n",
+                                                    encoding="utf-8")
+        before = (fresh.root / store.IGNORE_NAME).read_bytes()
+        fresh.create("Owned", key="OWN")
+        self.assertEqual((fresh.root / store.IGNORE_NAME).read_bytes(), before)
+        self.assertFalse(fresh.write_ignore(), "a second init claimed to write again")
+        self.assertEqual((fresh.root / store.IGNORE_NAME).read_bytes(), before)
+
     def test_create_refuses_to_overwrite_an_existing_board(self) -> None:
         """An overwritten board is unrecoverable; "already initialised" is not.
 

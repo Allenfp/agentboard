@@ -36,14 +36,25 @@ conservatively: an ambiguous comparison SHALL be treated as a collision.
 - **WHEN** a claim declares a pattern that shares no file with any unexpired claim
 - **THEN** the claim succeeds
 
-### Requirement: A pattern that matches nothing is a teaching error
-A declared pattern that matches no file in the working tree SHALL be refused with a
-message stating what was matched and how to express the intent, rather than a bare
-invalid-value error.
+### Requirement: A directory named as a pattern is refused
+A bare directory path with no wildcard SHALL be refused, naming the tree form to
+use instead — it reads like the name of one file and claims an entire subtree.
 
 #### Scenario: A directory named as a pattern
 - **WHEN** an agent declares a bare directory path with no wildcard
-- **THEN** the refusal states how many files it would cover and shows the tree form to use instead
+- **THEN** the refusal says it would claim every file beneath it and shows the tree form to use instead
+
+#### Scenario: The refusal gives no file count
+- **WHEN** a directory is refused
+- **THEN** the message states no number of files it would cover, because nothing in the store walks the tree and the count would differ in a shallow clone, a partial checkout, or a tree mid-`git clean`
+
+### Requirement: A pattern that matches nothing is valid
+Matching nothing SHALL NOT be an error.
+
+#### Scenario: A file that does not exist yet
+- **WHEN** an agent claims a card with a path for a file it is about to write
+- **THEN** the claim is accepted
+- **AND** refusing it would make new files unclaimable and push agents to claim a whole directory instead, the exact trap the rule above exists to close
 
 ### Requirement: Cross-machine overlap is detected, not prevented
 Two clones SHALL be able to take claims whose patterns intersect without either

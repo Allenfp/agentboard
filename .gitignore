@@ -18,8 +18,14 @@ htmlcov/
 # `.yamlboard/` itself is tracked - it IS the board, and a clone that arrived
 # without it cannot tell who holds which file. Only the two per-machine
 # artefacts are ignored: the advisory flock and the scratch of an interrupted
-# save. Both are matched at any depth so the checked-in fixture under
-# examples/ behaves exactly like a real store at the repo root.
+# save.
+# `init` now seeds these same two rules inside every store it writes, so a board
+# dropped into a foreign repo keeps itself clean without editing that repo's
+# root file. These lines are the second brace: they cover stores created before
+# that rule existed, and they are what
+# TestQuietWrites::test_the_lock_and_the_scratch_are_the_two_ignored_names
+# pins, so widening either list back to `.yamlboard*` fails a test rather than
+# silently untracking the board.
 **/.yamlboard/.lock
 **/.yamlboard/.tmp-*.yaml
 

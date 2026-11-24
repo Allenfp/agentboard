@@ -19,12 +19,25 @@ only one.
 - **WHEN** an agent in a clone with nothing listening runs the claim workflow
 - **THEN** every step succeeds against the files alone
 
-### Requirement: Identity resolution
-Mutating commands SHALL act as a named agent, taken from an explicit flag, else an
-environment variable, else the local part of the configured git user email. The
-resolved name SHALL be echoed before anything is written. A name that is
-syntactically invalid, or that is not listed among the board's people, SHALL be
-refused; the system SHALL NOT create people as a side effect of a claim.
+### Requirement: Claim verbs name an agent, board verbs do not
+Commands that act *on a claim* — taking, renewing, releasing, finishing,
+commenting — SHALL act as a named agent, taken from an explicit flag, else an
+environment variable, else the local part of the configured git user email, and
+the resolved name SHALL be echoed before anything is written. Commands that only
+shape the board SHALL NOT demand one. A name supplied to either kind is used.
+
+#### Scenario: Filling a queue you will not work in
+- **WHEN** a person creates cards and wires dependencies with no identity configured
+- **THEN** every one of those commands succeeds
+
+### Requirement: A claimed identity is a known person
+A name that is syntactically invalid, or absent from the board's people, SHALL be
+refused, and no command SHALL create a person as a side effect of a claim.
+
+#### Scenario: Initialising a store seeds the roster
+- **WHEN** a brand-new board is initialised under a name
+- **THEN** that name is written into the people list, because a board with no people can never be claimed from
+- **AND** a name that is not a valid slug is not written at all
 
 #### Scenario: Environment names the agent
 - **WHEN** the environment variable is set and no flag is given
@@ -39,14 +52,18 @@ refused; the system SHALL NOT create people as a side effect of a claim.
 - **THEN** the command is refused with exit status for a refused operation and no file is written, and the people list is not extended
 
 ### Requirement: A denial names the next move
-A refused claim SHALL report, in order: who holds the card and for how long, which
-of the caller's paths collide and with whose pattern, any unfinished blocker, and
-finally a concrete command the caller can run next naming its own agent. A denial
+A refused claim SHALL report every reason it has, not only the first, and SHALL
+end with a concrete command the caller can run next naming its own agent. A denial
 SHALL be distinguishable from other failures by exit status alone.
 
 #### Scenario: A denied claim is actionable
 - **WHEN** a claim is refused because another agent holds the card
 - **THEN** the output names the holder, the remaining time, the colliding paths and a ready-command for the caller, and the exit status is the claim-denied code
+
+#### Scenario: Card facts read before caller facts
+- **WHEN** a claim is refused for several reasons at once
+- **THEN** who holds the card and any unfinished blocker come first, and the caller's own colliding paths last
+- **AND** nothing counts the lines: card-level facts are the same for every caller, and the count varies with how many apply
 
 #### Scenario: Success and refusal are separable without reading text
 - **WHEN** a script runs a claim
@@ -54,8 +71,15 @@ SHALL be distinguishable from other failures by exit status alone.
 
 ### Requirement: Machine-readable output
 Every command SHALL accept a flag producing a single JSON document on standard
-output with no surrounding prose. Human output SHALL go to standard error, so a
-scripted caller never has to separate prose from data within one stream.
+output with no prose on either stream. Without that flag, human facts SHALL go to
+standard output one per line and only the identity banner to standard error:
+`yamlboard claim ... | tee log` should capture what happened, not the chatter
+around it, and a scripted caller opts into the flag rather than learning which
+lines of prose to discard.
+
+#### Scenario: Success keeps the outcome on stdout
+- **WHEN** a claim succeeds without the machine-readable flag
+- **THEN** the line naming the claimed card is on standard output and standard error holds nothing but the identity banner
 
 #### Scenario: Denied claim as JSON
 - **WHEN** a refused claim is requested in machine-readable form
@@ -78,9 +102,9 @@ take it and, if not, why, in one call.
 The command line SHALL expose: initialising a store, serving the dashboard,
 creating a card, validating and summarising the store, showing one card, listing
 cards, listing ready cards, claiming, renewing, releasing, finishing, editing
-dependencies, reporting and resolving conflicts, migrating an old store, and
-installing or locating the agent skill. Command help SHALL document the exit codes,
-including the claim-denied code.
+dependencies, commenting on a card, reporting and resolving conflicts, migrating
+an old store, and installing or locating the agent skill. Command help SHALL
+document the exit codes, including the claim-denied code.
 
 #### Scenario: Validation replaces the old inspection flags
 - **WHEN** a person asks whether a store is valid
@@ -89,6 +113,16 @@ including the claim-denied code.
 #### Scenario: Inspecting a store that is not there
 - **WHEN** validation is run outside an initialised store
 - **THEN** it exits with the invalid status and says the store does not exist, without creating one
+
+### Requirement: Every prescribed step is a verb
+Every operation the skill tells an agent to perform SHALL have a verb. An
+operation that exists only in the HTTP API is invisible to an agent, which is
+pointed at the command line and never at the transport.
+
+#### Scenario: A prescribed recovery step exists as a command
+- **WHEN** the skill tells an agent to leave a note for the human after losing a claim
+- **THEN** a `comment` verb performs exactly that
+- **AND** a prescribed step with no command is a dead end an agent can only fail at
 
 ### Requirement: Migration is one-shot
 The system SHALL convert a single-file board into the directory store, preserving

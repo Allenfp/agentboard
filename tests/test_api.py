@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime
 import importlib.resources as resources
 import os
+import random
 import re
 import tempfile
 import unittest
@@ -1238,6 +1239,191 @@ class TestOneCardPerFile(Ops):
         self.op("field.delete", board="web", id="customer")
         self.assertNotIn("customer", self.card(card_id).get("fields", {}))
         self.assertIsNone(self.store.read_all().card(card_id).result)
+
+
+# --------------------------------------------------------------------------- #
+# drag and drop: `before` is the card the drop lands in front of
+# --------------------------------------------------------------------------- #
+
+class TestDropPositions(Ops):
+    """The argument names the successor, not the predecessor.
+
+    Position is a float on the card, so a card id has to become a gap between
+    two neighbours, and reading ``before`` as the card to sit *behind* lands the
+    drop one slot lower than the hint the reader was aiming at. Nothing passed
+    ``before`` anywhere in this suite until now, so the drag and the server
+    disagreed about the same word in the same commit and stayed shipped.
+    """
+
+    def column(self, column_id: str = "backlog") -> list[str]:
+        return [str(c.get("id")) for c in self.tx().cards()
+                if c.get("column") == column_id]
+
+    def four(self) -> list[str]:
+        return [self.new_card(t) for t in "ABCD"]
+
+    def drop(self, card_id: str, before: str | None = None,
+             column: str = "backlog", board: str = "web") -> dict:
+        args: dict[str, Any] = {"id": card_id, "board": board, "column": column}
+        if before is not None:
+            args["before"] = before
+        return self.op("card.move", **args)
+
+    def test_a_drop_lands_in_front_of_the_card_it_was_aimed_at(self) -> None:
+        a, b, c, d = self.four()
+        self.assertEqual(self.column(), [a, b, c, d])
+        self.drop(d, before=b)
+        self.assertEqual(self.column(), [a, d, b, c])
+
+    def test_a_drop_above_the_top_card_reaches_the_top(self) -> None:
+        a, b, c, d = self.four()
+        self.drop(d, before=a)
+        self.assertEqual(self.column(), [d, a, b, c])
+
+    def test_a_drop_above_the_last_card_is_not_an_append(self) -> None:
+        """The one case where the off-by-one was invisible-by-accident: one slot
+        past the end is the end, so only the card above the bottom showed it."""
+        a, b, c, d = self.four()
+        self.drop(a, before=d)
+        self.assertEqual(self.column(), [b, c, a, d])
+
+    def test_a_drop_without_a_target_appends(self) -> None:
+        a, b, c, d = self.four()
+        self.drop(a)
+        self.assertEqual(self.column(), [b, c, d, a])
+
+    def test_a_target_that_vanished_appends_instead_of_guessing(self) -> None:
+        """A poll can remove the card the drag was aimed at between mousedown
+        and write. Any position inferred from a card that is gone is a lie about
+        where somebody else's card should be."""
+        a, b, c, d = self.four()
+        self.op("card.delete", id=c)
+        self.drop(a, before=c)
+        self.assertEqual(self.column(), [b, d, a])
+
+    def test_a_card_dropped_in_front_of_itself_stays_put(self) -> None:
+        a, b, c, d = self.four()
+        self.drop(a, before=a)
+        self.assertEqual(self.column(), [a, b, c, d])
+
+    def test_reordering_rewrites_the_moved_card_and_no_other(self) -> None:
+        """The claim that makes one-file-per-card worth its complexity."""
+        a, b, c, d = self.four()
+        self.commit("four cards")
+        self.drop(a, before=c)
+        self.assertEqual([p for _, _, p in self.numstat()],
+                         [".yamlboard/cards/WEB-1.yaml"])
+
+    def test_a_column_survives_hundreds_of_arbitrary_drops(self) -> None:
+        """Float gaps halve on every insert into the same slot, so a long run of
+        drops into one gap is what proves the rebalance actually fires — and
+        that it never leaves two cards sharing a position or a card unmapped."""
+        ids = self.four()
+        rng = random.Random(20261124)
+        for _ in range(300):
+            shown = self.column()
+            pick = rng.choice(shown)
+            target = rng.choice(shown + [None])
+            self.drop(pick, before=target)
+            self.assertEqual(self.column(), sorted(self.column(),
+                          key=lambda i: self.card(i)["order"]),
+                          "display order disagrees with the numbers")
+            self.assertEqual(len({self.card(i)["order"] for i in ids}), len(ids),
+                             "two cards share a position")
+        self.assertEqual(sorted(self.column()), sorted(ids))
+        self.assertEqual(self.tx().problems(), [])
+
+
+class TestCrossBoardMove(Ops):
+    """A move to another board is a rename, and renames are where flush breaks.
+
+    The card leaves one board's namespace and enters another's, so the file's
+    name is part of the write. Nothing here tested a second board at all, which
+    is how a move could delete a card, raise on its own way back, and leave the
+    suite green.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        doc = self.store.read_board().doc
+        doc["boards"].append({
+            "id": "ops", "key": "OPS", "title": "Ops", "lease_ttl": "30m",
+            "columns": [{"id": "backlog", "name": "Backlog", "color": "#888888"},
+                        {"id": "done", "name": "Done", "color": "#22aa22"}],
+            "custom_fields": [], "next_card": 1,
+        })
+        self.store.write_board(doc)
+        self.commit("two boards")
+
+    def ids(self) -> set[str]:
+        return {str(c.get("id")) for c in self.tx().all_cards()}
+
+    def test_a_move_to_another_board_rekeys_the_card_and_keeps_its_work(self) -> None:
+        card_id = self.new_card("Important")
+        self.op("card.comment", id=card_id, text="do not lose this", by="ada")
+        self.op("card.dep.add", id=(other := self.new_card("Blocked")), blocked_by=card_id)
+        self.commit("card with history")
+
+        moved = self.op("card.move", id=card_id, board="ops", column="backlog")
+        self.assertTrue(moved["cross_board"])
+        self.assertEqual(moved["id"], "OPS-1")
+        # the file moved, it did not vanish
+        self.assertTrue((self.store.cards_dir / "OPS-1.yaml").is_file())
+        self.assertFalse((self.store.cards_dir / f"{card_id}.yaml").exists())
+        self.assertNotIn(card_id, self.ids())
+        # and everything hanging off it came with it
+        self.assertIn("do not lose this", self.card_text("OPS-1"))
+        self.assertEqual(self.card(other)["blocked_by"], ["OPS-1"])
+        self.assertEqual(self.tx().problems(), [])
+
+    def test_an_adopted_id_is_never_handed_to_the_next_card(self) -> None:
+        """A card arriving in a board whose ``next_card`` is still 1 keeps its
+        number, and must not be re-issued to the next card that board creates:
+        two cards, one filename, one of them silently lost in every read after.
+        The id rescan is what saves this, not the counter."""
+        for _ in range(4):
+            self.new_card("filler")
+        self.op("card.move", id="WEB-4", board="ops", column="backlog")
+        self.assertEqual(self.op("card.create", board="ops", title="fresh")["id"],
+                         "OPS-5", "the rescan did not climb past the adopted id")
+        self.assertEqual(len(self.ids()), len(set(self.ids())))
+
+    def test_a_rename_onto_an_id_the_target_already_owns_is_refused(self) -> None:
+        """``WEB-1`` moving into a board that already has ``OPS-1`` would put two
+        cards in one file. The interesting half is the refusal: the card that was
+        refused must still be on disk, unmodified."""
+        self.op("card.create", board="ops", title="ops owns this number")   # OPS-1
+        mine = self.new_card("web one")                                     # WEB-1
+        self.commit("one card per board")
+        before = self.card_text(mine)
+
+        err = self.expect(api.BadRequest, "card.move", id=mine, board="ops",
+                          column="backlog")
+        self.assertIn("OPS-1", str(err))
+        self.assertIn("already exists", str(err))
+        self.assertEqual(self.card_text(mine), before)
+        self.assertEqual(self.card(mine)["column"], "backlog")
+        self.assertEqual(self.card("OPS-1")["title"], "ops owns this number")
+        self.no_temp_files()
+
+    def test_a_cross_board_move_changes_the_card_and_nothing_else(self) -> None:
+        """The rename's footprint: the old path deleted, the new one added. The
+        board file stays out of it — id allocation rescans, so the adopted id is
+        safe without raising a counter, and not rewriting ``board.yaml`` is one
+        less path for two clones to collide over."""
+        card_id = self.new_card("One")
+        self.commit("one card")
+        self.op("card.move", id=card_id, board="ops", column="backlog")
+
+        self.assertEqual([p for _, _, p in self.numstat()],
+                         [".yamlboard/cards/WEB-1.yaml"],
+                         "a rename dirtied something besides the card it moved")
+        self.assertFalse((self.store.cards_dir / "WEB-1.yaml").exists())
+        self.assertTrue((self.store.cards_dir / "OPS-1.yaml").is_file(),
+                        "the new path is missing: the card was deleted, not moved")
+        self.assertEqual(self.op("card.create", board="ops", title="next")["id"],
+                         "OPS-2", "the rescan did not climb past the adopted id")
+        self.assertEqual(len(self.ids()), len(set(self.ids())))
 
 
 # --------------------------------------------------------------------------- #

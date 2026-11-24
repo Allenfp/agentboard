@@ -55,6 +55,26 @@ def from_git_email(root: Path | None) -> str | None:
     return email.split("@", 1)[0].strip().lower() or None
 
 
+def candidate(
+    *,
+    as_flag: str | None = None,
+    root: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str | None:
+    """The name this run would act as, before the board is asked to confirm it.
+
+    Slug-checked but NOT allowlist-checked, which is the whole difference between
+    this and :func:`resolve`. It exists for the one moment where the allowlist
+    cannot answer: a brand-new board has no people yet, so validating against it
+    would reject the very identity that has to seed it. Returning None means
+    nobody is named, and callers decide whether that is a default or an error.
+    """
+    env = os.environ if env is None else env
+    raw = as_flag or env.get(ENV_VAR) or from_git_email(root)
+    text = str(raw).strip() if raw else ""
+    return text if model.SLUG_RE.match(text) else None
+
+
 def resolve(
     doc: dict | None,
     *,

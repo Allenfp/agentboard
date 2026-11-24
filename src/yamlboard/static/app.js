@@ -328,8 +328,13 @@ function movedFiles(before, state) {
     if (!tokenMoved) continue;
     const restSame = JSON.stringify(ownBytes(old)) === JSON.stringify(ownBytes(card));
     const who = assigneeChange(old, card);
-    if (who === "lease") { news.claims.push(id); news.rebuild = true; continue; }
-    (restSame && who === "same" ? news.claims : news.content).push(id);
+    // Lease-only means BOTH tests pass: only derived fields moved, and any
+    // `assignee` move agrees with the claim. Anything else is content, and the
+    // coarser answer wins — a poll that carried a claim *and* a hand-edit of the
+    // same card must still say "changed on disk", or the human is silently
+    // shown somebody else's edit with no explanation of where it came from.
+    if (restSame && who !== "edit") { news.claims.push(id); news.rebuild = true; continue; }
+    news.content.push(id);
   }
   for (const id of was.keys()) if (!now.has(id)) news.gone.push(id);   // deleted or archived
   /* Nothing on this path wrote a card: `ready` and `conflicts` are computed per
@@ -823,7 +828,11 @@ function renderBoard() {
   main.textContent = "";
 
   const current = board();
-  if (!current) { main.append(emptyFile()); return; }
+  /* Both empty states are dead ends if they only say "empty". A store from
+     `yamlboard init` has one board and no cards, so without this branch the
+     first thing a new person sees is four columns reading "Empty." and no hint
+     that a card is one keystroke away or that agents exist at all. */
+  if (!current || !allCards(current).length) { main.append(emptyFile(!current)); return; }
 
   if (S.view === "list") main.append(renderList(current));
   else main.append(renderGrid(current));
@@ -832,17 +841,27 @@ function renderBoard() {
   main.scrollTop = scroll.y;
 }
 
-function emptyFile() {
+/**
+ * The one empty state, for both "no board yet" and "board with nothing on it".
+ *
+ * `noBoard` changes only the primary action, because everything else a stuck
+ * reader needs is the same, and two near-identical panels is two things to keep
+ * in sync for no extra meaning.
+ */
+function emptyFile(noBoard) {
+  const note = readOnly() ? $("p", { class: "note" }, "This server is running read-only.") : null;
+  const action = readOnly() ? null
+    : noBoard ? $("button", { class: "primary", onclick: openNewBoardDialog }, "Create the first board")
+      : $("button", { class: "primary", onclick: () => openNewCard(board()?.columns?.[0]?.id) },
+        "Create the first card");
   return $("div", { class: "empty" },
-    $("h2", {}, "This board has no cards yet"),
+    $("h2", {}, noBoard ? "This repo has no board yet" : "This board has no cards yet"),
     $("p", {}, "Two jobs, one directory. Make a card: press ", $("kbd", {}, "n"),
-      " here, or run ", $("code", {}, "yamlboard create \"Ship the report\" --as you"),
+      " here, or run ", $("code", {}, 'yamlboard create "Ship the report" --as you'),
       " anywhere in the repo."),
     $("p", {}, "Let agents work beside you: run ", $("code", {}, "yamlboard skill install"),
       " in the repo, and the next agent that opens it claims a card before it edits a file."),
-    readOnly() ? $("p", { class: "note" }, "This server is running read-only.")
-      : $("button", { class: "primary", onclick: openNewBoardDialog }, "Create the first board"),
-  );
+    note, action);
 }
 
 /* ------------------------------------------------------------------ board grid */
@@ -2298,8 +2317,13 @@ function clashFor(cardId) {
     const { winner, loser } = report;
     if (winner.card !== cardId && loser.card !== cardId) continue;
     const other = winner.card === cardId ? loser : winner;
+    /* Name this card's side by name, not by omission: the same shape of
+       sentence appears on both cards of the pair, and "ada on PROD-2 collides
+       here — ada keeps it" on ada's own tile reads like a typo, not a ruling. */
+    const mine = winner.card === cardId ? winner : loser;
     const pairs = (report.patterns || []).map((p) => `${p.a} ↔ ${p.b}`).join(", ");
-    lines.push(`${other.agent} on ${other.card} collides here (${pairs}) — ${winner.agent} claimed first and keeps it`);
+    lines.push(`${mine.agent}'s claim here collides with ${other.agent} on ${other.card}`
+      + ` (${pairs}) — ${winner.agent} claimed first and keeps it`);
   }
   return lines;
 }
@@ -2513,54 +2537,85 @@ async function claimCard(cardId, paths) {
  * answers a loose directory with a refusal worded as instructions.
  */
 function coordSection(card) {
-  const claim = card.claim || {};
-  const agent = currentAgent();
-  // The payload's `state` is computed with no caller, so it says `taken` where
-  // this browser would say `yours`; comparing ids here is the one judgement the
-  // client is allowed to make, and only about which name it is wearing.
-  const mine = !!card.live && claim.agent === agent;
-  const status = $("p", { class: "claim-state" + (card.overlaps ? " overlaps" : "") },
-    mine ? `You hold this card as ${agent}${(claim.paths || []).length ? `, claiming ${(claim.paths || []).join(", ")}` : ""}.`
-      : card.live ? `${claim.agent} holds it until ${clockTime(parseStamp(claim.expires) ?? 0)}`
-        + `${(claim.paths || []).length ? `, claiming ${(claim.paths || []).join(", ")}` : ""}.`
-      : claim.overridden_by ? `${claim.agent}'s claim was overridden by ${claim.overridden_by}; the card is free again.`
-      : card.state === "blocked" ? `Blocked by ${(card.open_blockers || []).join(", ")} — finish those first.`
-      : "Nobody holds this card. Claim it before editing anything it covers.");
-  const clashes = clashFor(card.id);
-  const who = $("select", { "aria-label": "Claim this card as" },
-    ...people().map((p) => $("option", { value: p.id, selected: p.id === agent }, p.name)));
+  const body = $("div", {});
+  /* Hoisted out of the repaint: choosing a different identity rebuilds the
+     buttons, and a paths box rebuilt with them would silently discard whatever
+     the person had typed into it. */
   const paths = $("input", {
     type: "text", placeholder: "src/api/**, docs/notes.md", size: "26",
     "aria-label": "Paths this work will touch",
     title: "Comma-separated globs. A directory pattern needs /** on the end.",
   });
-  const split = () => paths.value.split(",").map((p) => p.trim()).filter(Boolean);
-  const button = (label, kind, onclick, title) => $(
-    "button", { class: kind, disabled: readOnly() || !people().length, title, onclick }, label);
-  const nobody = !people().length;
-  const row = $("div", { class: "claim-row" },
-    nobody ? $("span", { class: "note" }, "add a person in Settings (s) before claiming") : who,
-    card.live ? null : paths,
-    card.live || nobody ? null : button("Claim", "primary",
-      () => claimCard(card.id, split()),
-      `claim.create as ${agent} — the same op the CLI runs`),
-    mine ? button("Renew", "ghost", async () => {
-      const done = await send("claim.renew", { id: card.id, agent }, "Renew");
-      if (done) toast(`${card.id} extended to ${clockTime(parseStamp(done.expires) ?? Date.now())}.`, "success", 5000);
-    }, `Extend your lease on ${card.id} by one full TTL`) : null,
-    card.live ? button("Release", "ghost", async () => {
-      const done = await send("claim.release", { id: card.id, agent, force: !mine }, "Release");
-      if (done && done.released === false) toast(`${card.id} was not claimed, so there was nothing to release.`, "info");
-    }, mine ? "Give the card up now"
-      : `Force-release ${claim.agent}'s live claim — recorded on the card as released_by ${agent}`) : null,
-    nobody ? null : button(card.archived ? "Unarchive" : "Mark done", "ghost", async () => {
-      if (card.archived) { await send("card.unarchive", { id: card.id }, "Unarchive"); return; }
-      const done = await send("card.done", { id: card.id }, "Mark done");
-      if (done) toast(`${card.id} finished${card.live ? " and its lease was released" : ""}.`, "success", 5000);
-    }, card.archived ? "Restore it to the board" : "Move it to the done column and release any lease"));
-  return section("Coordination", $("div", {}, status,
-    clashes.length ? $("ul", { class: "claim-clash" }, ...clashes.map((line) => $("li", {}, line))) : null,
-    readOnly() ? null : row));
+  const paint = (keepFocus) => {
+    const live = cardById(card.id) || card;
+    const claim = live.claim || {};
+    const agent = currentAgent();
+    // The payload's `state` is computed with no caller, so it says `taken` where
+    // this browser would say `yours`; comparing ids here is the one judgement the
+    // client is allowed to make, and only about which name it is wearing.
+    const mine = !!live.live && claim.agent === agent;
+    const status = $("p", { class: "claim-state" + (live.overlaps ? " overlaps" : "") },
+      mine ? `You hold this card as ${agent}${(claim.paths || []).length ? `, claiming ${(claim.paths || []).join(", ")}` : ""}.`
+        : live.live ? `${claim.agent} holds it until ${clockTime(parseStamp(claim.expires) ?? 0)}`
+          + `${(claim.paths || []).length ? `, claiming ${(claim.paths || []).join(", ")}` : ""}.`
+        : claim.overridden_by ? `${claim.agent}'s claim was overridden by ${claim.overridden_by}; the card is free again.`
+          : live.state === "blocked" ? `Blocked by ${(live.open_blockers || []).join(", ")} — finish those first.`
+            : "Nobody holds this card. Claim it before editing anything it covers.");
+    const clashes = clashFor(card.id);
+    const who = $("select", {
+      "aria-label": "Claim this card as",
+      onchange: (event) => {
+        // One identity, persisted exactly like the toolbar's. Claim, renew and
+        // release all read currentAgent(), so a picker whose value nothing read
+        // would claim as whoever the toolbar happened to say — and the buttons
+        // below have to be rebuilt, or Renew stays offered for a card the newly
+        // chosen person does not hold.
+        S.agent = event.target.value;
+        savePref("yb.agent", S.agent);
+        if (els.agentSelect) els.agentSelect.value = S.agent;
+        paint();
+      },
+    }, ...people().map((p) => $("option", { value: p.id, selected: p.id === agent }, p.name)));
+    const split = () => paths.value.split(",").map((p) => p.trim()).filter(Boolean);
+    const button = (label, kind, onclick, title) => $(
+      "button", { class: kind, disabled: readOnly() || !people().length, title, onclick }, label);
+    const nobody = !people().length;
+    const row = $("div", { class: "claim-row" },
+      nobody ? $("span", { class: "note" }, "add a person in Settings (s) before claiming") : who,
+      live.live ? null : paths,
+      live.live || nobody ? null : button("Claim", "primary",
+        () => claimCard(card.id, split()),
+        `claim.create as ${agent} — the same op the CLI runs`),
+      mine ? button("Renew", "ghost", async () => {
+        const done = await send("claim.renew", { id: card.id, agent }, "Renew");
+        if (done) toast(`${card.id} extended to ${clockTime(parseStamp(done.expires) ?? Date.now())}.`, "success", 5000);
+      }, `Extend your lease on ${card.id} by one full TTL`) : null,
+      live.live ? button("Release", "ghost", async () => {
+        const done = await send("claim.release", { id: card.id, agent, force: !mine }, "Release");
+        if (done && done.released === false) toast(`${card.id} was not claimed, so there was nothing to release.`, "info");
+      }, mine ? "Give the card up now"
+        : `Force-release ${claim.agent}'s live claim — recorded on the card as released_by ${agent}`) : null,
+      nobody ? null : button(live.archived ? "Unarchive" : "Mark done", "ghost", async () => {
+        if (live.archived) { await send("card.unarchive", { id: card.id }, "Unarchive"); return; }
+        const done = await send("card.done", { id: card.id }, "Mark done");
+        if (done) toast(`${card.id} finished${live.live ? " and its lease was released" : ""}.`, "success", 5000);
+      }, live.archived ? "Restore it to the board" : "Move it to the done column and release any lease"));
+    // Rebuilt through `$`, not bare `append`: the branches above hand back null
+    // for the controls that do not apply, and append() would stringify those.
+    const freshBody = $("div", {}, status,
+      clashes.length ? $("ul", { class: "claim-clash" }, ...clashes.map((line) => $("li", {}, line))) : null,
+      readOnly() ? null : row);
+    const active = body.contains(document.activeElement) ? document.activeElement : null;
+    const back = active?.id ? "#" + CSS.escape(active.id) : null;
+    while (body.firstChild) body.firstChild.remove();
+    while (freshBody.firstChild) body.append(freshBody.firstChild);
+    // The control the person just used is inside the rebuilt part, so under the
+    // modal's focus trap focus would land back on <body>; hand it to the same
+    // control's replacement.
+    if (keepFocus && back) body.querySelector(back)?.focus();
+  };
+  paint();
+  return section("Coordination", body);
 }
 
 function claimFocusedCard() {

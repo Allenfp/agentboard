@@ -40,15 +40,15 @@ from .model import ValidationError
 #: the point: an agent reading a stale skill is worse than an agent reading none.
 VERBS = (
     "init", "serve", "create", "check", "show", "list", "ready", "claim",
-    "renew", "release", "done", "dep", "conflicts", "migrate", "skill",
+    "renew", "release", "done", "dep", "comment", "conflicts", "migrate", "skill",
 )
 
 #: Verbs that change files, so the anti-drift test can prove the skill documents
 #: each one. ``serve`` is deliberately absent: agents are pointed at the files,
 #: never at a server that need not be running.
 MUTATING = frozenset({
-    "init", "create", "claim", "renew", "release", "done", "dep", "conflicts",
-    "migrate",
+    "init", "create", "claim", "renew", "release", "done", "dep", "comment",
+    "conflicts", "migrate",
 })
 
 EXIT_OK = 0
@@ -71,8 +71,10 @@ exit codes:
 identity:
   --as NAME, else $YAMLBOARD_AGENT, else the local part of `git config
   user.email`. The name must already be one of the board's people: yamlboard
-  never invents an identity, because an assignee nobody recognises surfaces
-  weeks later in a git blame.
+  never invents one mid-board, because an assignee nobody recognises surfaces
+  weeks later in a git blame. `init` is the exception -- a new board lists
+  nobody and could never be claimed from, so it seeds the roster with the
+  name it was given. Add the rest in the board's Settings.
 
 examples:
   yamlboard init --title Web --key WEB
@@ -80,6 +82,7 @@ examples:
   yamlboard ready --paths 'src/api/**'
   yamlboard claim WEB-3 --paths 'src/api/**,tests/test_api.py'
   yamlboard renew WEB-3
+  yamlboard comment WEB-3 "reverting my cache change, see src/cache/"
   yamlboard done WEB-3
 """
 
@@ -116,6 +119,7 @@ class Out:
         self.json = json_mode
         self.stream = stream
         self._data: dict[str, Any] = {}
+        self._emitted = False
 
     def fact(self, text: str) -> None:
         """One line for a human, dropped when ``--json`` owns the stream."""
@@ -127,7 +131,15 @@ class Out:
         self._data.update(fields)
 
     def emit(self) -> None:
-        if self.json:
+        """Write the document, at most once per run.
+
+        ``serve`` emits before it blocks so a caller can read the URL out of a
+        stream it will not see again, and ``main`` emits for every verb on the
+        way out. Without the guard, stopping the server with ctrl-C appended a
+        second document to stdout and broke the one promise ``--json`` makes.
+        """
+        if self.json and not self._emitted:
+            self._emitted = True
             json.dump(self._data, self.stream, indent=2, default=str)
             self.stream.write("\n")
 
@@ -183,8 +195,15 @@ def _who(args: argparse.Namespace, doc: dict | None) -> str | None:
         return identity.resolve(doc, as_flag=getattr(args, "agent", None),
                                 root=_repo_of(args))
     except identity.UnknownAgent as exc:
-        raise Usage(str(exc), "next: yamlboard list   # see this board's people") \
-            from exc
+        # Two different dead ends, and the old hint was wrong for both: it
+        # pointed at `list`, which prints cards and has never listed people,
+        # while the message above already names the valid ones. Empty roster is
+        # the other case, and no retry fixes that one -- only Settings can.
+        known = ", ".join(exc.known)
+        nxt = (f"next: yamlboard <verb> --as {exc.known[0]}   # or one of: {known}"
+               if exc.known
+               else "next: open Settings > People in `yamlboard serve` to add yourself")
+        raise Usage(str(exc), nxt) from exc
 
 
 def _repo_of(args: argparse.Namespace) -> Path | None:
@@ -263,19 +282,33 @@ def verb_init(args: argparse.Namespace, out: Out) -> int:
             return EXIT_OK
         out.fact(f"{board.root} already holds a board - left alone")
         return EXIT_OK
+    # A board whose `people` list is empty is a board nobody can claim from: the
+    # allowlist is the only thing identity is checked against, and nothing else in
+    # the CLI creates a person. So the identity this run was named with — `--as`,
+    # else $YAMLBOARD_AGENT, else git's user.email — becomes the first person,
+    # which is also the name the hint below is about to print. Seeding it here is
+    # the only point where that is safe: the allowlist is empty, so there is no
+    # risk of inventing an identity that overrides a real roster.
+    who = identity.candidate(as_flag=args.agent, root=root)
     try:
-        board.create(args.title or "Board", key=args.key)
+        board.create(args.title or "Board", key=args.key, people=[who] if who else [])
     except (store.StoreError, ValidationError) as exc:
         raise Usage(str(exc)) from exc
     out.fact(f"created {board.root}")
-    out.fact("  board.yaml, cards/, archive/")
+    out.fact(f"  board.yaml, cards/, archive/, {store.IGNORE_NAME}")
     if not args.json:
         # The two commands that make the board useful, printed at the exact
         # moment the reader wants them and nowhere else.
         out.fact("")
+        if who:
+            out.fact(f"  people: {who} (you; add the rest in the board's Settings)")
         out.fact("next:")
-        out.fact(f"  yamlboard create \"First card\" --as {args.agent or '<you>'}")
+        out.fact(f"  yamlboard create \"First card\" --as {who or '<you>'}")
         out.fact("  yamlboard skill install     # teach agents in this repo the protocol")
+        if not who:
+            out.fact("")
+            out.fact("  no identity found: pass --as <name> to name yourself, or open")
+            out.fact("  Settings > People in `yamlboard serve` before claiming anything")
     out.data(ok=True, path=str(board.root), existed=False)
     return EXIT_OK
 
@@ -290,7 +323,19 @@ def verb_serve(args: argparse.Namespace, out: Out) -> int:
     except OSError as exc:
         # Port busy, or a bind the OS refuses. 1, never 2: nothing the caller
         # typed is wrong, the machine simply will not hand over the socket.
-        raise SystemExit(f"yamlboard: cannot listen on {args.host}:{args.port}: {exc}") from exc
+        # `data` before the raise because `main` emits on the way out -- under
+        # --json this used to print a bare `{}`, which parses and says nothing.
+        message = f"cannot listen on {args.host}:{args.port}: {exc}"
+        out.data(ok=False, error=message)
+        raise SystemExit(f"yamlboard: {message}") from exc
+    except RuntimeError as exc:
+        # Deliberately a different exit from the one above. This bind was
+        # refused by us, not the kernel: the caller asked to expose a writable
+        # board with no auth, so something they typed IS wrong and CI should
+        # treat it as a bad invocation, not retry a port. And it must not
+        # escape as a traceback -- the message already names both fixes, and a
+        # stack trace around it reads like a crash in our code.
+        raise Usage(str(exc), "next: yamlboard serve --read-only   # or --allow-public") from exc
     shown = "localhost" if server.is_loopback(args.host) else args.host
     out.fact(f"yamlboard {__version__} on http://{shown}:{args.port}")
     out.fact(f"  board {app.root}")
@@ -299,6 +344,11 @@ def verb_serve(args: argparse.Namespace, out: Out) -> int:
     elif not server.is_loopback(args.host):
         out.fact(f"  WARNING {args.host} is reachable from other machines and there is no auth")
     out.fact("  ctrl-c to stop")
+    # --json still gets its one document, printed before the serve loop blocks:
+    # a caller starts the server, reads the URL out of the document, and then
+    # never sees stdout again. An empty {} would parse but answer nothing.
+    out.data(ok=True, url=f"http://{shown}:{args.port}", path=str(app.root),
+             read_only=bool(args.read_only))
     out.emit()
     try:
         httpd.serve_forever()
@@ -341,7 +391,13 @@ def verb_check(args: argparse.Namespace, out: Out) -> int:
     payload = api.summary(tx, dirty=_dirty(st))
     reports = payload["conflicts"]
     cards = sum(len(b.get("cards") or []) for b in model.boards(payload["doc"]))
-    out.data(ok=not problems, path=str(st.root), problems=problems, strays=strays,
+    # `ok` and the exit code are one answer, not two: the JSON path used to gate
+    # on `problems or strays` and forget `reports`, so a board holding a live path
+    # conflict reported ok:true / exit 0 while the same board without --json
+    # exited 2. A CI gate written against --json passed exactly the case the
+    # command exists to catch.
+    unhealthy = bool(problems or strays or reports)
+    out.data(ok=not unhealthy, path=str(st.root), problems=problems, strays=strays,
              boards=[str(b.get("id")) for b in model.boards(tx.doc)],
              cards=cards, conflicts=reports)
     out.fact(f"{st.root}")
@@ -355,7 +411,7 @@ def verb_check(args: argparse.Namespace, out: Out) -> int:
         out.fact(f"  unreadable: cards/{name} — not named like a card (WEB-1.yaml), "
                  "so no command will ever read it")
     if args.json:
-        return EXIT_USAGE if (problems or strays) else EXIT_OK
+        return EXIT_USAGE if unhealthy else EXIT_OK
     if problems:
         out.fact("")
         out.fact("the board does not validate; nothing else will write to it until it does")
@@ -509,6 +565,22 @@ def verb_done(args: argparse.Namespace, out: Out) -> int:
     return EXIT_OK
 
 
+def verb_comment(args: argparse.Namespace, out: Out) -> int:
+    st = _store(args)
+    # The one verb whose whole job is to be read by someone else: it is how a
+    # losing agent leaves an account of work it is about to delete, and how a
+    # human finds out why a card moved. Identity is demanded rather than
+    # inferred -- an unattributed note on a contested card is worth nothing, and
+    # `card.comment` refuses an author the board has never heard of anyway.
+    agent = _who(args, api.Tx(st).doc)
+    result = _run_op(st, out, agent, "card.comment",
+                     {"id": args.id, "text": args.text, "by": agent})
+    out.fact(f"commented on {args.id} as {agent}")
+    out.fact(f"  {result['count']} comment(s) on the card now")
+    out.data(ok=True, **result)
+    return EXIT_OK
+
+
 def verb_dep(args: argparse.Namespace, out: Out) -> int:
     st = _store(args)
     # Wiring up dependencies is board shape, not a claim on anybody's work, so it
@@ -613,6 +685,26 @@ def verb_migrate(args: argparse.Namespace, out: Out) -> int:
     board["next_card"] = max(wanted_next if model.is_int(wanted_next) and wanted_next > 0 else 1,
                              highest + 1)
     tx.touch()
+    # ``--force`` means "add to a store that already exists", and the people and
+    # label loops above do exactly that: merge, skipping ids already present.
+    # Cards used to clobber instead, so re-running a migration onto a board that
+    # had moved on overwrote same-id cards with their v1 copies at exit 0 -- and
+    # the spec says migrating twice is refused with nothing overwritten. Refusing
+    # before ``flush`` means not one byte moves; a real merge of a *different*
+    # file's cards still goes through, because only clashing ids stop it.
+    # ``all_cards``, not ``cards``: a migrated v1 card marked archived lands in
+    # ``archive/``, where the live-only view cannot see it, and the guard has to
+    # cover the retired ones exactly as much as the live ones.
+    already = {str(c.get("id")) for c in tx.all_cards()}
+    clashes = [str(c.get("id")) for c in plan["cards"] if str(c.get("id")) in already]
+    if clashes:
+        shown = ", ".join(clashes[:5]) + ("..." if len(clashes) > 5 else "")
+        raise Usage(
+            f"{len(clashes)} card(s) in {source.name} already exist in {target.root}"
+            f" ({shown}); nothing was written. This store has probably been migrated"
+            " already -- if the old file really is newer, migrate into an empty"
+            " directory and copy over the cards you want",
+        )
     for card in plan["cards"]:
         model.set_field(card, "card", "order",
                         float(model.ORDER_GAP * (1 + len(tx.card_ids()))))
@@ -641,10 +733,21 @@ def verb_skill(args: argparse.Namespace, out: Out) -> int:
     here = Path(args.dir or ".").resolve()
     repo = gitops.repo_root(here / "dummy") or here
     dest = repo / ".agents" / "skills" / "yamlboard" / "SKILL.md"
+    block = dest.parent / "AGENTS-block.md"
     payload = bundled.read_bytes()
     out.data(ok=True, source=str(bundled), target=str(dest))
     if dest.exists() and dest.read_bytes() == payload:
+        # The skill file is current, but the AGENTS block is a second artefact
+        # and this early return used to skip it, so deleting that one file left
+        # a reinstall that reported success and still did not restore it. It is
+        # the CLI's own text, never hand-edited, so rewriting it is safe here
+        # in a way the skill file above -- which someone may have customised --
+        # deliberately is not.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        block.write_text(AGENTS_BLOCK, encoding="utf-8")
+        out.data(written=False, agents_block=str(block))
         out.fact(f"{dest} is already current")
+        out.fact(f"  AGENTS block: {block}")
         return EXIT_OK
     if dest.exists() and not args.force:
         raise Usage(
@@ -656,15 +759,18 @@ def verb_skill(args: argparse.Namespace, out: Out) -> int:
         out.fact(f"writing {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(payload)
-    out.data(written=True)
+    block.write_text(AGENTS_BLOCK, encoding="utf-8")
+    # The block is the only part some runtimes ever read, so a scripted install
+    # has to be able to find it: stdout carries exactly one document, so the
+    # text itself is not reproduced here, only where it lives.
+    out.data(written=True, agents_block=str(block))
     out.fact("")
     out.fact("paste this into AGENTS.md so runtimes that read that file find the skill:")
     out.fact("")
     for line in AGENTS_BLOCK.splitlines():
         out.fact(f"  {line}")
     out.fact("")
-    out.fact(f"(also saved to {dest.parent / 'AGENTS-block.md'})")
-    (dest.parent / "AGENTS-block.md").write_text(AGENTS_BLOCK, encoding="utf-8")
+    out.fact(f"(also saved to {block})")
     return EXIT_OK
 
 
@@ -965,6 +1071,13 @@ def build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--as", dest="agent", help=as_help)
     dep.add_argument("--json", action="store_true")
 
+    comment = store_dir(add("comment", "leave a note on a card for whoever reads it next"),
+                        "directory containing .yamlboard/")
+    comment.add_argument("id")
+    comment.add_argument("text", help="the note, quoted; it is read by a human or another agent")
+    comment.add_argument("--as", dest="agent", help=as_help)
+    comment.add_argument("--json", action="store_true")
+
     conflicts = store_dir(add("conflicts", "report overlaps git could not see"),
                           "directory containing .yamlboard/")
     conflicts.add_argument("--resolve", action="store_true",
@@ -1002,6 +1115,7 @@ VERB_FUNCTIONS: dict[str, Callable[[argparse.Namespace, Out], int]] = {
     "release": verb_release,
     "done": verb_done,
     "dep": verb_dep,
+    "comment": verb_comment,
     "conflicts": verb_conflicts,
     "migrate": verb_migrate,
     "skill": verb_skill,

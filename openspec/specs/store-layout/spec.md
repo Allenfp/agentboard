@@ -18,9 +18,14 @@ data in the board configuration file.
 - **WHEN** a person initialises a board in an empty git repository
 - **THEN** the directory contains a configuration file and empty card and archive directories, and the command prints what to run next
 
-#### Scenario: One card write touches one path
-- **WHEN** an agent edits a card
+#### Scenario: One card edit touches one path
+- **WHEN** an agent edits an existing card
 - **THEN** exactly one file changes on disk, named after that card's id, and the board configuration file is unmodified
+
+#### Scenario: Creating a card touches two
+- **WHEN** an agent creates a card
+- **THEN** the card's file appears and the board configuration file's `next_card` advances in the same operation
+- **AND** two clones creating from the same commit SHALL be detected as a duplicate id by `conflicts`, not silently merged
 
 ### Requirement: Card files are named by card id
 Each card file SHALL be named after the card's id, so a card's identity and its
@@ -77,6 +82,15 @@ The lock file and interrupted-write temporary files the system creates inside th
 board directory SHALL be ignored by git, and the ignore rules SHALL be specific
 enough that the board directory itself and all card files remain tracked.
 
+#### Scenario: The rules travel with the board
+- **WHEN** a board is initialised inside a repository whose root ignore file says nothing about this tool
+- **THEN** the board directory contains its own ignore file covering the lock and the temporary files
+- **AND** the repository's root ignore file is not modified
+
+#### Scenario: The owner's own ignore file wins
+- **WHEN** the board directory already contains an ignore file
+- **THEN** initialisation leaves its bytes exactly as they were
+
 #### Scenario: The board is tracked but its lock is not
 - **WHEN** a write happens and `git status` is consulted
 - **THEN** the changed card files are listed and neither the lock nor any temporary file appears
@@ -94,6 +108,17 @@ store twice SHALL produce the same order.
 #### Scenario: Reorder writes one file
 - **WHEN** a card is dragged to a new position within its column
 - **THEN** only that card's file changes
+
+#### Scenario: A move names the card it lands in front of
+- **WHEN** a move requests position `before` some card B
+- **THEN** the moved card reads immediately ahead of B, not behind it
+- **AND** a move with no target appends to the end of the column
+- **AND** a target that no longer exists in the column appends, rather than being placed at a position inferred from the absent card
+- **AND** a card moved in front of itself keeps the position it had
+
+#### Scenario: The gap is computed against the column the move produces
+- **WHEN** the moved card's own position would otherwise be a neighbour
+- **THEN** it is excluded, so the new position sits strictly between the two cards that will remain adjacent
 
 #### Scenario: Two clones reorder different cards
 - **WHEN** two clones each move a different card in the same column and merge
