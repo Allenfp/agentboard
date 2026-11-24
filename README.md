@@ -331,8 +331,9 @@ $ yamlboard check --dir examples/demo
 /home/you/my-repo/examples/demo/.yamlboard
   2 board(s), 14 card(s), 3 people
   conflict: overlap: PROD-2 (ada) and PROD-3 (grigory) claim the same files
+  conflict: PROD-2 claims tests/test_api.py but the working tree already has changes in tests/test_api.py
 
-1 conflict(s): yamlboard conflicts --resolve settles an overlap by hand
+2 conflict(s): yamlboard conflicts --resolve frees the loser of an overlap and corrects a mismatched card id
 ```
 
 Its leases are timestamps, not promises: they will lapse, and those cards go back
@@ -354,7 +355,7 @@ overlap: PROD-2 (ada) and PROD-3 (grigory) claim the same files
   loser  grigory on PROD-3 (claimed 2026-11-24T00:52:00)
   earliest `at` wins; a tie goes to the alphabetically first name
 
-next: yamlboard conflicts --resolve   # the earliest claim wins, the other is marked overridden
+next: yamlboard conflicts --resolve   # frees the loser of an overlap, and corrects a card whose id disagrees with its filename
 ```
 
 Reporting writes nothing, so two clones asking independently get the same answer
@@ -372,10 +373,14 @@ $ yamlboard conflicts
 no conflicts - no two live claims share a path, and no ids collide.
 ```
 
-The same sweep reports duplicate card ids (two clones minted `WEB-2` before
-either saw the other) and a claim whose paths match files already modified in your
-working tree. `git pull --ff-only` before you claim and after you finish is what
-keeps this list short.
+The same sweep reports a card whose `id:` disagrees with its filename — the
+ordinary result of a merge where you kept both copies of `cards/WEB-1.yaml` and
+one landed on a borrowed name — and a claim whose paths match files already
+modified in your working tree. `--resolve` rewrites the `id:` to match the
+filename, because the filename is the address every reader uses; the file itself
+is never moved. When two files want the same name it says so and leaves both
+alone rather than picking a survivor. `git pull --ff-only` before you claim and
+after you finish is what keeps this list short.
 
 ## The board in a browser
 

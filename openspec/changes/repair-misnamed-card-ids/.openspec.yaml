@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-11-24
+goal: "A card whose filename and declared id disagree is reported by filename
+  and repaired by `conflicts --resolve`, without ever deleting a card to make
+  room for the rename"

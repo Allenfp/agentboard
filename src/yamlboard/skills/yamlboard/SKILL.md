@@ -91,6 +91,19 @@ yamlboard conflicts            # read-only
 yamlboard conflicts --resolve  # writes overridden_by; a human decision, not yours
 ```
 
+## When conflicts names a bad file name
+
+A merge that kept both copies of a card leaves one file declaring an id another card
+answers to. `conflicts` reports it as `bad name:`, naming the file, not just the id.
+`--resolve` rewrites that file's `id:` to match its filename — the file never moves and
+no card is deleted — but the same call also releases overlap losers, so it stays the
+human's command. When two files want the same name it refuses and names both: picking
+a survivor is a judgement about intent, and guessing deletes a card.
+
+```bash
+yamlboard conflicts   # read-only: report it to the human, with the file path
+```
+
 ## Hard rules
 
 - Never edit a file inside another agent's claimed `paths`, however obviously correct the edit is.

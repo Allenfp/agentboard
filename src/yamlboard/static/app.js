@@ -2682,14 +2682,36 @@ function openConflicts() {
   if (!reports.length) body.append($("p", { class: "note" }, "Nothing is colliding right now."));
   for (const report of reports) {
     if (report.kind === "overlap") { body.append(overlapRow(report)); continue; }
+    // A misname is titled by what the file *declares*, not by the id it should
+    // take: the file is already called PROD-90.yaml, so "PROD-90.yaml is really
+    // PROD-90" restates the filename and tells the reader nothing.
+    const title = report.kind === "duplicate"
+      ? `${report.card} exists ${report.times} times`
+      : report.kind === "misnamed"
+        ? `${report.file} claims to be ${report.was}`
+        : `${report.card} — ${report.agent}`;
+    // `fixable` is the server's verdict, not the browser's guess: the same
+    // check decides what `conflicts.resolve` will act on, so a button that
+    // appears here is a button that does something. The blocked case names both
+    // files and offers nothing clickable, because choosing between them is the
+    // human's call and the wrong guess deletes a card.
+    const fix = report.kind === "misnamed" && report.fixable
+      ? $("div", { class: "clash-foot" },
+         $("button", {
+           class: "primary", disabled: readOnly(),
+           title: `Rewrite ${report.file} so its id reads ${report.card}`,
+           onclick: async () => {
+             const done = await send("conflicts.resolve", { card: report.card }, "Correct id");
+             if (!done) return;
+             toast(`${report.card}: id corrected to match the filename.`, "success", 6000);
+             if ((S.state?.conflicts || []).length) openConflicts(); else closeModal();
+           },
+         }, "Correct the id"))
+      : null;
     body.append($("div", { class: "clash note-row" },
-      $("strong", {}, report.kind === "duplicate"
-        ? `${report.card} exists ${report.times} times`
-        : `${report.card} — ${report.agent}`),
-      $("p", { class: "note" }, report.detail
-        || (report.kind === "duplicate"
-          ? "Two clones minted the same id; delete or renumber one of them."
-          : "Claims paths the working tree already has changed."))));
+      $("strong", {}, title),
+      $("p", { class: "note" }, report.detail),
+      ...(fix ? [fix] : [])));
   }
   openModal(`Conflicts (${reports.length})`, body,
     [$("span", { class: "grow" }), $("button", { class: "ghost", onclick: closeModal }, "Close")], true);

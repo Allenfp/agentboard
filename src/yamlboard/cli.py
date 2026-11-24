@@ -418,8 +418,8 @@ def verb_check(args: argparse.Namespace, out: Out) -> int:
         return EXIT_USAGE
     if reports:
         out.fact("")
-        out.fact(f"{len(reports)} conflict(s): yamlboard conflicts --resolve settles "
-                 "an overlap by hand")
+        out.fact(f"{len(reports)} conflict(s): yamlboard conflicts --resolve frees "
+                 "the loser of an overlap and corrects a mismatched card id")
         return EXIT_USAGE        # CI should fail on a board that is lying
     if strays:
         out.fact("")
@@ -615,10 +615,13 @@ def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
         agent = _who(args, tx.doc)
         result = _run_op(st, out, agent, "conflicts.resolve", {})
         for item in result["resolved"]:
-            out.fact(f"{item['card']}: {item['agent']} overridden by {item['overridden_by']}")
-        out.fact(f"{result['count']} claim(s) released; those cards are ready again")
-        out.data(ok=True, resolved=result["resolved"], count=result["count"])
-        return EXIT_OK
+            out.fact(_resolved_line(item))
+        for line in result.get("needs_human") or []:
+            out.fact(f"left for you: {line}")
+        out.fact(_resolve_summary(result["resolved"], result.get("needs_human") or []))
+        out.data(ok=True, resolved=result["resolved"], count=result["count"],
+                 needs_human=result.get("needs_human") or [])
+        return EXIT_USAGE if result.get("needs_human") else EXIT_OK
     for report in reports:
         out.fact(_conflict_line(report))
         for detail in _conflict_detail(report):
@@ -628,8 +631,8 @@ def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
         out.fact("no conflicts - no two live claims share a path, and no ids collide.")
         return EXIT_OK
     out.fact("")
-    out.fact("next: yamlboard conflicts --resolve   # the earliest claim wins, "
-             "the other is marked overridden")
+    out.fact("next: yamlboard conflicts --resolve   # frees the loser of an overlap, "
+             "and corrects a card whose id disagrees with its filename")
     return EXIT_USAGE     # reported, not acted on: a CI gate should see this
 
 
@@ -860,6 +863,36 @@ def _run_op(st: store.Store, out: Out, agent: str | None, op: str,
         raise Usage(str(exc)) from exc
     return result
 
+
+def _resolved_line(item: dict) -> str:
+    if item.get("kind") == "misnamed":
+        return f"{item['was']} -> {item['card']}: {item['file']} agrees with its id again"
+    return f"{item['card']}: {item['agent']} overridden by {item['overridden_by']}"
+
+
+def _resolve_summary(resolved: list[dict], needs_human: list[str]) -> str:
+    """What actually changed, and what did not.
+
+    The old line said "claim(s) released" whatever happened, so a duplicate id -
+    which releases nothing - printed a success a reader could act on. Each kind
+    counts itself, and anything left over says so in the same line rather than
+    hiding under an "all done".
+    """
+    released = sum(1 for i in resolved if i["kind"] == "overlap")
+    renamed = sum(1 for i in resolved if i["kind"] == "misnamed")
+    parts = []
+    if released:
+        parts.append(f"{released} claim(s) released")
+    if renamed:
+        parts.append(f"{renamed} id(s) corrected to match their file")
+    if not parts:
+        parts.append("nothing released or corrected")
+    if needs_human:
+        parts.append(f"{len(needs_human)} left for a human")
+        return ", ".join(parts) + " - see above"
+    return ", ".join(parts) + ("; those cards are ready again" if released else "")
+
+
 def _conflict_line(report: dict) -> str:
     kind = report.get("kind")
     if kind == "overlap":
@@ -868,6 +901,8 @@ def _conflict_line(report: dict) -> str:
                 f"{lose['card']} ({lose['agent']}) claim the same files")
     if kind == "duplicate":
         return f"duplicate id: {report['detail']}"
+    if kind == "misnamed":
+        return f"bad name: {report['detail']}"
     return str(report.get("detail") or kind)
 
 
@@ -885,7 +920,10 @@ def _conflict_detail(report: dict) -> list[str]:
             f"loser  {lose['agent']} on {lose['card']} (claimed {lose['at']})",
             "earliest `at` wins; a tie goes to the alphabetically first name",
         ]
-    return [str(report.get("detail"))] if report.get("detail") else []
+    # Everything except an overlap is a single self-contained sentence in
+    # `detail`, which `_conflict_line` already printed: repeating it underneath
+    # as an indented copy reads like two different problems.
+    return []
 
 
 # --------------------------------------------------------------------------- #

@@ -260,10 +260,23 @@ like the rest, because each of them has a second and third copy elsewhere.
   lying. A `renew` legitimately changes one line; a claim that rewrites the card
   is a bug.
 - **P43** Conflict detection is read-only; only `conflicts.resolve` writes, and
-  only `overridden_by`. Detection derives the winner from bytes already on disk
-  (earliest `at`, tie to the alphabetically smaller agent), so two clones asking
-  independently get the same answer without talking. A read path that repairs a
-  conflict is how a report becomes a silent edit of somebody else's claim.
+  only `overridden_by` on an overlap's loser or `id`/`updated` on a card whose
+  filename and declared id disagree. Detection derives the winner from bytes
+  already on disk (earliest `at`, tie to the alphabetically smaller agent), so two
+  clones asking independently get the same answer without talking. A read path
+  that repairs a conflict is how a report becomes a silent edit of somebody
+  else's claim.
+- **P43b** The filename is a card's address, and `id:` has to agree with it.
+  `Store.card_ids()`, `locate()` and `blocked_by` validation all read the stem, so
+  a `cards/WEB-2.yaml` declaring `id: WEB-1` gives readers two answers: the next
+  `claim WEB-1` writes `WEB-1.yaml` and leaves `WEB-2.yaml` behind as a stale twin
+  under an id nothing can load. The repair aligns `id:` to the name and never the
+  other way round, because git merges filenames and never a counter line in
+  `board.yaml`. Two consequences nobody may drop: `store._ordered` must not key
+  card files by id (that collapses a duplicate pair into one handle, hiding a card
+  while rendering its twin twice), and `write_card`'s sibling unlink must prove
+  the sibling declares the same `id:` first — otherwise archiving one card
+  deletes an unrelated card that merely shares its name.
 - **P44** Identity resolves in exactly one place, `identity.resolve`: `--as`,
   then `$YAMLBOARD_AGENT`, then the local part of `git config user.email`, and
   it must already be in `people`. Nothing creates a person anywhere in the

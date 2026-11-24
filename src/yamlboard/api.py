@@ -23,6 +23,7 @@ list-view sort for every human reading the board.
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from . import model, store
@@ -642,6 +643,99 @@ def ready(tx: Tx, agent: str | None = None, patterns: list[str] | None = None) -
     ))
 
 
+def _misnamed(tx: Tx) -> list[dict]:
+    """Every card file whose ``id:`` disagrees with its filename.
+
+    One record per file: the handle, the id it declares (``was``), the id its
+    name says it should have (``card``), and ``block`` -- the file that makes the
+    repair unsafe, or None.
+
+    The filename is the card's address: ``Store.card_ids()`` lists stems,
+    ``validate_card`` checks ``blocked_by`` against stems, and ``locate()``
+    answers by name. A ``WEB-7.yaml`` declaring ``id: WEB-1`` is one card with
+    two addresses and the readers disagree -- the next ``claim WEB-1`` finds it by
+    content, writes ``WEB-1.yaml``, and leaves ``WEB-7.yaml`` as a stale twin that
+    keeps appearing in ``list`` under an id nothing can load. It arrives from a
+    merge: two clones mint ``WEB-1``, git conflicts on ``cards/WEB-1.yaml``, and
+    the human keeps both copies, so one lands on a borrowed name still saying
+    ``id: WEB-1``. Aligning ``id:`` to the name is the one repair two clones reach
+    without talking, because git merges filenames and never a counter line.
+
+    ``block`` is decided from the bytes as read, before any repair, so
+    ``conflicts`` and ``conflicts_resolve`` agree: the report never offers a fix
+    the resolve will refuse -- which matters because the browser's repair button
+    is built from this record.
+    """
+    cards = tx.snapshot.all_cards()
+    found: list[dict] = []
+    for handle in cards:
+        ident = str(handle.doc.get("id") or "")
+        stem = handle.path.stem
+        if ident and ident != stem:
+            found.append({"handle": handle, "was": ident, "card": stem,
+                          "file": _show(handle.path),
+                          "block": _misname_block(cards, handle, stem)})
+    return found
+
+
+def _misname_block(cards: list, handle: Any, stem: str) -> Any | None:
+    """Another file that makes this repair unsafe, or None.
+
+    The name is claimed twice over, and both count: another file already *named*
+    ``stem`` (in either directory, since one id may not live in two places), or
+    another file that *declares* it from somewhere else.
+
+    The stem half is not redundant with the id half. ``cards/WEB-2.yaml`` and
+    ``archive/WEB-2.yaml`` both declaring ``id: WEB-1`` is two files that want to
+    become ``WEB-2``; repairing both yields two cards of one id, and
+    ``write_card`` then unlinks the live/archive sibling -- so checking only
+    "would this write overwrite a path" lets both through and deletes one of them
+    on the write.
+
+    Every clash is refused rather than arbitrated. Picking which claimant keeps a
+    name is a question about intent, and the guess costs a card.
+    """
+    return next((other for other in cards if other is not handle
+                 and (other.path.stem == stem
+                      or str(other.doc.get("id") or "") == stem)), None)
+
+
+def _misname_detail(record: dict) -> str:
+    """One sentence about one file: what is wrong, and what happens next.
+
+    Names the file, not just the id: "WEB-1 exists 2 times" cannot be acted on
+    when neither file is called WEB-1 twice, so the reader has nothing to open.
+
+    Each misnamed file gets its own line even when two of them block each other,
+    which prints the pair twice from opposite ends. That is the honest count --
+    both files are individually unfixable -- and grouping them into one line would
+    claim a single action settles both, when it only settles the one touched.
+    """
+    other = record["block"]
+    if other is None:
+        return (f"{record['file']} declares id:{' '}{record['was']!r} but is named "
+                f"{record['card']}; the name is the address, so its id becomes "
+                f"{record['card']!r}")
+    held = str(other.doc.get("id") or "")
+    return (f"{record['file']} cannot become {record['card']}: "
+            f"{_show(other.path)} holds that name"
+            + (f" (it declares id:{' '}{held!r})" if held != record["card"] else "")
+            + " - delete or renumber one of the two")
+
+
+def _show(path: Any) -> str:
+    """A card path as ``cards/WEB-2.yaml``, not a 60-character absolute path.
+
+    Two files in different directories share a basename, and a message that
+    prints ``WEB-2.yaml collides with WEB-2.yaml`` says nothing about which is
+    which; both are named below the store root, which is the part that differs.
+    """
+    try:
+        return str(Path(path).relative_to(Path(path).parents[1]))
+    except (IndexError, ValueError):
+        return Path(path).name
+
+
 def conflicts(tx: Tx, dirty: list[str] | None = None) -> list[dict]:
     """Overlaps git could not see, reported without writing anything.
 
@@ -683,6 +777,13 @@ def conflicts(tx: Tx, dirty: list[str] | None = None) -> list[dict]:
                           "paths": list(loser["claim"].get("paths") or [])},
                 "patterns": pairs,
             })
+
+    misnamed = _misnamed(tx)
+    for record in misnamed:
+        found.append({"kind": "misnamed", "card": record["card"],
+                      "was": record["was"], "file": record["file"],
+                      "fixable": record["block"] is None,
+                      "detail": _misname_detail(record)})
 
     counts: dict[str, int] = {}
     for card in tx.all_cards():
@@ -882,12 +983,61 @@ def claim_release(tx: Tx, args: dict) -> dict:
     return {"id": card_id, "released": True, "was": holder}
 
 
+def _repair_misnames(tx: Tx, wanted: str) -> tuple[list[dict], list[str]]:
+    """Rewrite each misnamed card's ``id:`` so it matches its filename.
+
+    Returns ``(repairs, needs_human)``. A repair is a content edit, not a file
+    move: once ``id:`` says ``WEB-7`` the doc names the file it already lives in,
+    so ``write_card`` rewrites the path it was read from and no rename, counter
+    bump, or archive dance is involved.
+
+    Which cards may be repaired comes from :func:`_misnamed`, the same decision
+    ``conflicts`` reports, so the browser never renders a repair button for a card
+    this function will refuse.
+
+    ``blocked_by`` holds ids that validation resolves against the card set, so
+    references follow the id only when the old id is left with no owner: in the
+    usual merge pair (``WEB-1.yaml`` correct, ``WEB-2.yaml`` misnamed) ``WEB-1``
+    still resolves, and rewriting a dependency to ``WEB-2`` would silently
+    re-point it at a different card.
+    """
+    repairs: list[dict] = []
+    needs_human: list[str] = []
+    cards = tx.snapshot.all_cards()
+    for record in _misnamed(tx):
+        handle, ident, stem = record["handle"], record["was"], record["card"]
+        if wanted and stem != wanted:
+            continue
+        if record["block"] is not None:
+            needs_human.append(_misname_detail(record))
+            continue
+        card = handle.doc
+        adopted = any(other is not handle and str(other.doc.get("id") or "") == ident
+                      for other in cards)
+        model.set_field(card, "card", "id", stem)
+        model.set_field(card, "card", "updated", model.now())
+        repointed = 0
+        if not adopted:
+            for other in cards:
+                blockers = other.doc.get("blocked_by")
+                if model.is_list(blockers) and ident in blockers:
+                    other.doc["blocked_by"] = [stem if b == ident else b
+                                               for b in blockers]
+                    repointed += 1
+                    tx.dirty(other.doc)
+        tx.dirty(card)
+        repairs.append({"kind": "misnamed", "card": stem, "was": ident,
+                        "file": record["file"], "repointed": repointed})
+    return repairs, needs_human
+
+
 def conflicts_resolve(tx: Tx, args: dict) -> dict:
-    """Mark the loser of an overlap as overridden, freeing its card.
+    """Settle what the board can settle: free the overlap loser, fix bad names.
 
     Explicit only, and idempotent: re-running after the winner's file has already
     arrived from a pull changes nothing, because the loser's claim is no longer
-    live and therefore no longer reported.
+    live and therefore no longer reported, and a card whose ``id:`` already
+    matches its filename is not misnamed.
     """
     wanted = str(args.get("card") or "").strip()
     resolved: list[dict] = []
@@ -907,11 +1057,15 @@ def conflicts_resolve(tx: Tx, args: dict) -> dict:
         if card.get("assignee") == claim.get("agent"):
             card.pop("assignee", None)
         tx.dirty(card)
-        resolved.append({"card": loser["card"], "agent": claim.get("agent"),
+        resolved.append({"kind": "overlap", "card": loser["card"],
+                         "agent": claim.get("agent"),
                          "overridden_by": report["winner"]["agent"]})
+
+    renamed, needs_human = _repair_misnames(tx, wanted)
+    resolved.extend(renamed)
     if wanted and not resolved:
         raise BadRequest(f"no unresolved conflict on card {wanted!r}")
-    return {"resolved": resolved, "count": len(resolved)}
+    return {"resolved": resolved, "count": len(resolved), "needs_human": needs_human}
 
 
 # --------------------------------------------------------------------------- #

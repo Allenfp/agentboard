@@ -186,6 +186,21 @@ def _stat(path: Path) -> tuple[int | None, int | None]:
     return (info.st_mtime_ns, info.st_size)
 
 
+def _file_id(path: Path) -> str | None:
+    """The ``id:`` a card file declares, or None if it cannot be read.
+
+    Used to prove a file is the card being moved rather than a stranger that
+    merely shares its name. None on any failure, deliberate: an unreadable
+    sibling is an unprovable one, and the caller keeps it.
+    """
+    try:
+        doc = _read_file(path, None).doc
+    except StoreError:
+        return None
+    ident = doc.get("id") if model.is_map(doc) else None
+    return str(ident) if model.is_str(ident) else None
+
+
 def _dumps(doc: dict, sequence: int, offset: int) -> bytes:
     buffer = io.StringIO()
     _yaml(sequence, offset).dump(doc, buffer)
@@ -432,11 +447,20 @@ class Store:
                 raise ValidationError(errors)
             target = self.card_path(card_id, archived=archived)
             stale = self.card_path(card_id, archived=not archived)
-            written = _write_file(target, doc)
-            if stale.is_file():
+            # The sibling path holds the same id in the other directory, which is
+            # normally this card changing between live and archived -- ours to
+            # remove. "Normally" is doing the work there: two files can carry one
+            # id without being one card (a merge that kept both copies of
+            # WEB-1.yaml), and then the sibling is somebody else's card that
+            # merely happens to share a name. Reading it and matching its `id:`
+            # is the difference between finishing a move and deleting a stranger;
+            # unreadable means unprovable, so it stays.
+            if stale.is_file() and _file_id(stale) == card_id:
+                written = _write_file(target, doc)
                 stale.unlink()
                 _fsync_dir(stale.parent)
-            return written
+                return written
+            return _write_file(target, doc)
 
     def write_board(self, doc: dict) -> File:
         """Write ``board.yaml`` as-is; the caller has already validated it."""
@@ -599,11 +623,18 @@ def _write_file(path: Path, doc: dict) -> File:
 
 
 def _ordered(files: list[File]) -> list[File]:
-    """Card files in display order, so the browser and CLI agree unprompted."""
-    by_id = {str(h.doc.get("id")): h for h in files}
-    return [by_id[str(d.get("id"))]
-            for d in model.sort_cards([h.doc for h in files])
-            if str(d.get("id")) in by_id]
+    """Card files in display order, so the browser and CLI agree unprompted.
+
+    Returns every file it was given, because two files carrying the same ``id:``
+    is exactly the state ``conflicts`` exists to report: keying a dict by id
+    (as this did) made the second overwrite the first, so a board with a
+    duplicate id showed one card twice and hid the other from ``list``,
+    ``ready``, and every command that looks cards up here. Sorting the handles
+    rather than a lookup table keeps the pair visible and the count honest.
+    """
+    by_doc = {id(h.doc): h for h in files}
+    return [by_doc[id(doc)] for doc in model.sort_cards([h.doc for h in files])
+            if id(doc) in by_doc]
 
 
 # --------------------------------------------------------------------------- #

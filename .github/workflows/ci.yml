@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # `--frozen`, not a fresh resolve: a workflow that re-resolves dependencies
+      # passes on the day the lock file is stale and fails locally, which is the
+      # wrong way round for the check meant to catch exactly that.
+      - run: uv sync --frozen --group dev
+
+      - run: uv run --group dev ruff check src tests
+
+      - run: uv run pytest -q
+
+      # The example board is documentation that runs: README tells people to
+      # `list` it. `conflicts` is deliberately not run here -- examples/demo ships
+      # a live overlap to teach what the report looks like, so it exits 2 on a
+      # healthy repo, and a gate that is red on a good commit gets ignored.
+      - run: uv run python -m yamlboard.cli list --dir examples/demo
+      - run: uv run python -m yamlboard.cli skill path

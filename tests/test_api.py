@@ -908,7 +908,8 @@ class TestCrossMachineConflicts(Ops):
 
         result = self.op("conflicts.resolve")
         self.assertEqual(result["resolved"],
-                         [{"card": early, "agent": "grigory", "overridden_by": "ada"}])
+                         [{"kind": "overlap", "card": early, "agent": "grigory",
+                           "overridden_by": "ada"}])
         card = self.card(early)
         self.assertEqual(card["claim"]["overridden_by"], "ada")
         self.assertNotIn("assignee", card)
@@ -1013,6 +1014,125 @@ class TestCrossMachineConflicts(Ops):
                          "the report names the claim but not the file to go look at")
         self.assertIn("working tree", dirty[0]["detail"])
         self.assertEqual(api.conflicts(self.tx(), ["docs/a.md", "README.md"]), [])
+
+# --------------------------------------------------------------------------- #
+# a card whose filename and id disagree
+# --------------------------------------------------------------------------- #
+
+class TestMisnamedCards(Ops):
+    """``cards/WEB-2.yaml`` declaring ``id: WEB-1``, and the repair for it.
+
+    A merge that keeps both copies of ``cards/WEB-1.yaml`` leaves the second one
+    on a borrowed name while still saying ``id: WEB-1``. The filename is the
+    address every reader uses -- ``card_ids()`` lists stems, ``blocked_by`` is
+    checked against stems -- so the id is the half that is wrong, and correcting
+    it must never cost anybody a card.
+    """
+
+    def twin(self, card_id: str, name: str, where: Path | None = None) -> Path:
+        """A copy of ``card_id``'s file written as ``name.yaml``, ``id:`` unchanged."""
+        target = (where or self.store.cards_dir) / f"{name}.yaml"
+        target.write_bytes(self.store.card_path(card_id).read_bytes())
+        return target
+
+    def test_a_file_named_for_another_id_is_reported_by_name(self) -> None:
+        """The report has to name the file, or the reader has nothing to open.
+
+        ``duplicate id: WEB-1`` on its own is unfalsifiable here: neither file is
+        called WEB-1 twice, so the advice "delete one of them" cannot be carried
+        out without guessing.
+        """
+        card_id = self.new_card("Real")
+        self.twin(card_id, "WEB-2")
+
+        misnamed = [r for r in api.conflicts(self.tx()) if r["kind"] == "misnamed"]
+        self.assertEqual(len(misnamed), 1, api.conflicts(self.tx()))
+        self.assertEqual(misnamed[0]["file"], "cards/WEB-2.yaml")
+        self.assertEqual((misnamed[0]["was"], misnamed[0]["card"]), ("WEB-1", "WEB-2"))
+
+    def test_resolve_aligns_the_id_with_the_file_it_lives_in(self) -> None:
+        card_id = self.new_card("Real")
+        self.twin(card_id, "WEB-2")
+
+        result = self.op("conflicts.resolve")
+        self.assertEqual([(r["kind"], r["card"], r["was"]) for r in result["resolved"]],
+                         [("misnamed", "WEB-2", "WEB-1")])
+        self.assertEqual(self.card("WEB-2")["id"], "WEB-2")
+        self.assertEqual(sorted(p.name for p in self.store.cards_dir.glob("*.yaml")),
+                         ["WEB-1.yaml", "WEB-2.yaml"])
+        self.assertEqual(api.conflicts(self.tx()), [],
+                         "resolving twice must be a no-op, not a second edit")
+
+    def test_repairing_a_name_never_deletes_the_card_at_the_other_path(self) -> None:
+        """The one way this repair could destroy work rather than save it.
+
+        ``write_card`` unlinks the id's sibling in the other directory because
+        that is the card being archived. Here the sibling is a *different* card
+        that merely shares the name, and the archived copy is not in the working
+        tree of anybody's mental model -- losing it is silent data loss.
+        """
+        card_id = self.new_card("Live")           # cards/WEB-1.yaml, id WEB-1
+        archived = self.twin(card_id, "WEB-2", where=self.store.archive_dir)
+        before = archived.read_bytes()
+        twin = self.twin(card_id, "WEB-2")        # cards/WEB-2.yaml, id WEB-1
+        twin_before = twin.read_bytes()
+
+        result = self.op("conflicts.resolve")
+        self.assertEqual(result["resolved"], [],
+                         "both files want the name WEB-2; picking one deletes the other")
+        self.assertEqual(archived.read_bytes(), before,
+                         "an archived card was deleted to make room for a rename")
+        self.assertEqual(twin.read_bytes(), twin_before)
+        # Refused, not arbitrated: picking which file keeps the name is a
+        # question about intent and the guess deletes a card. Each file is
+        # reported once, named by directory -- two files sharing a basename are
+        # indistinguishable any other way.
+        self.assertEqual(len(result["needs_human"]), 2, result["needs_human"])
+        for line in result["needs_human"]:
+            self.assertIn("cards/WEB-2.yaml", line)
+            self.assertIn("archive/WEB-2.yaml", line)
+        # The report must agree: no repair button for a repair that will refuse.
+        for report in api.conflicts(self.tx()):
+            if report["kind"] == "misnamed":
+                self.assertFalse(report["fixable"], report)
+
+    def test_two_files_one_id_are_both_visible_instead_of_one_appearing_twice(self) -> None:
+        """Ordering card files by id used to collapse the pair into one handle.
+
+        The lost card was invisible to ``list``, ``ready`` and ``conflicts``' own
+        count, while the survivor was rendered twice -- so the board advertised a
+        problem it then refused to show, and an agent could pick work that was
+        already written.
+        """
+        card_id = self.new_card("First")
+        self.twin(card_id, "WEB-2")
+
+        handles = self.tx().snapshot.all_cards()
+        self.assertEqual([h.path.name for h in handles],
+                         ["WEB-1.yaml", "WEB-2.yaml"],
+                         "one card hidden, the other counted twice")
+
+    def test_a_dependency_on_the_surviving_id_is_left_alone(self) -> None:
+        card_id = self.new_card("First")            # WEB-1
+        self.new_card("Second")                     # WEB-2, so the twin lands on 4
+        third = self.new_card("Third", blocked_by=[card_id])
+        self.twin(card_id, "WEB-4")
+
+        self.op("conflicts.resolve")
+        self.assertEqual(self.card(third)["blocked_by"], [card_id],
+                         "WEB-1 still exists, so re-pointing moved the blocker "
+                         "onto a different card")
+
+    def test_a_dependency_on_a_vanished_id_moves_with_it(self) -> None:
+        """When nothing else answers to the old id, an edge left behind would
+        fail validation and take the whole repair with it."""
+        second = self.new_card("Second")
+        third = self.new_card("Third", blocked_by=[second])
+        self.store.card_path(second).rename(self.store.cards_dir / "WEB-4.yaml")
+
+        self.op("conflicts.resolve")
+        self.assertEqual(self.card("WEB-4")["id"], "WEB-4")
+        self.assertEqual(self.card(third)["blocked_by"], ["WEB-4"])
 
 
 # --------------------------------------------------------------------------- #
