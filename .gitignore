@@ -1,0 +1,29 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# yamlboard runtime scratch
+# `.yamlboard/` itself is tracked - it IS the board, and a clone that arrived
+# without it cannot tell who holds which file. Only the two per-machine
+# artefacts are ignored: the advisory flock and the scratch of an interrupted
+# save. Both are matched at any depth so the checked-in fixture under
+# examples/ behaves exactly like a real store at the repo root.
+**/.yamlboard/.lock
+**/.yamlboard/.tmp-*.yaml
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,107 @@
+# yamlboard demo store. Copy it into a repo to see the whole thing working:
+
+#     cp -r examples/demo/.yamlboard ./ && yamlboard serve
+
+# There are no cards in this file. A card is a file in cards/, which is what makes an
+# unrelated card an unrelated path, and what let the global `rev` counter go.
+
+# Three cards carry hand-written claims so a fresh clone has something to look at,
+# and two of those claims overlap on purpose: PROD-2 holds `src/api/**`, PROD-3
+# holds `src/api/routes.py` inside it. That pair is what `yamlboard conflicts` reports.
+
+# Those timestamps were stamped when this fixture was committed, and a lease that
+# never lapsed would be a bug - the longest here is 24h, the ceiling the CLI writes.
+# When they have gone the cards are back in `ready`, `conflicts` says nothing, and
+# the board is still valid: you are looking at an idle board, not a broken one.
+# Claim two cards whose paths overlap to see the report again.
+version: 2
+title: Demo
+# People and labels are shared by every board in the store. `people` is also the
+# agent allowlist: --as a name that is not here is refused, never auto-created.
+people:
+  - id: ada
+    name: Ada Lovelace
+    color: "#2f6f4f"
+  - id: grigory
+    name: Grigory Perelman
+    color: "#7c3aed"
+  - id: ras
+    name: Ada's pair
+    color: "#b45309"
+labels:
+  - id: bug
+    name: Bug
+    color: "#d1495b"
+  - id: feature
+    name: Feature
+    color: "#2f6f4f"
+  - id: chore
+    name: Chore
+    color: "#64748b"
+  - id: docs
+    name: Docs
+    color: "#0f766e"
+boards:
+  - id: product
+    key: PROD
+    title: Product
+    columns:
+      - id: backlog
+        name: Backlog
+        color: "#7c8797"
+      - id: next
+        name: Next Up
+        color: "#0f766e"
+      - id: doing
+        name: In Progress
+        color: "#b45309"
+        wip_limit: 3
+      - id: review
+        name: Review
+        color: "#7c3aed"
+      - id: done
+        name: Done
+        color: "#2f6f4f"
+        is_done: true
+    custom_fields:
+      - id: customer
+        name: Customer
+        type: select
+        options:
+          - Acme
+          - Globex
+          - Initech
+        required: false
+      - id: ship_date
+        name: Ship date
+        type: date
+      - id: risk
+        name: Risky?
+        type: bool
+    next_card: 13
+    # This board's default lease; `claim --ttl` still wins. Omit it and the
+    # built-in default is 30m.
+    lease_ttl: 2h
+  - id: personal
+    key: PER
+    title: Personal
+    columns:
+      - id: someday
+        name: Someday
+      - id: thisweek
+        name: This week
+      - id: today
+        name: Today
+        wip_limit: 3
+      - id: done
+        name: Done
+        color: "#2f6f4f"
+        is_done: true
+    custom_fields:
+      - id: ship_date
+        name: Ship date
+        type: date
+      - id: risk
+        name: Risky?
+        type: bool
+    next_card: 4

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-11-23
+goal: "Let multiple LLM agents work one repo concurrently without colliding:
+  per-card files, leases over path globs, and an agent-facing skill"

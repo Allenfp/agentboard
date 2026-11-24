@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yamlboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><style>@media (prefers-color-scheme: dark){rect.b{fill:%232dd4bf}}</style><rect class='b' width='32' height='32' rx='7' fill='%230f766e'/><rect x='6' y='8' width='5' height='16' rx='1.5' fill='%23fff' opacity='.95'/><rect x='13.5' y='8' width='5' height='11' rx='1.5' fill='%23fff' opacity='.75'/><rect x='21' y='8' width='5' height='7' rx='1.5' fill='%23fff' opacity='.55'/></svg>">
+<script>
+/* Paint a stored choice before the stylesheet resolves, so dark users never see a
+   light frame. Only an explicit "dark" counts: anything else is left to app.js,
+   which re-validates prefs anyway and also follows the OS. */
+try {
+  if (localStorage.getItem("yb.theme") === "dark") document.documentElement.dataset.theme = "dark";
+} catch { /* storage disabled: the default stands */ }
+</script>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="boot" role="status" aria-live="polite">
+  <p class="boot-title">yamlboard</p>
+  <p class="boot-note">loading <code>.yamlboard/</code>…</p>
+</div>
+<noscript>
+  <style>/* scripting is off, so #boot will never be replaced by the board */ #boot { display: none; }</style>
+  <p><strong>yamlboard needs JavaScript.</strong> The board, the editor and every
+  claim run in this page, so with scripting disabled there is nothing to show.</p>
+  <p>The files are still the truth, and the CLI does not need this page at all: run
+  <code>yamlboard check</code> to validate the store, or <code>yamlboard ready</code>
+  to see what nobody has claimed.</p>
+</noscript>
+<div id="root" hidden></div>
+<div id="modal-root" hidden></div>
+<div id="toast-root" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>

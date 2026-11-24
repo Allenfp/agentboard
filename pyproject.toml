@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yamlboard"
+version = "0.1.0"
+description = "A per-repo coordination layer for concurrent coding agents: claim a card and its paths, then work without colliding."
+readme = "README.md"
+requires-python = ">=3.11"
+# PEP 639: the table form is deprecated and a future setuptools stops putting
+# the licence text in the wheel with it
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["agent-coordination", "yaml", "task-tracker", "local-first", "git", "multi-agent"]
+dependencies = ["ruamel.yaml>=0.18"]
+
+[project.urls]
+Homepage = "https://github.com/Allenfp/yamlboard"
+Repository = "https://github.com/Allenfp/yamlboard"
+Issues = "https://github.com/Allenfp/yamlboard/issues"
+
+[project.scripts]
+yamlboard = "yamlboard.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+yamlboard = ["static/*", "skills/*/*"]

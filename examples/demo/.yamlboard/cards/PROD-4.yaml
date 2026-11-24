@@ -1,0 +1,15 @@
+id: PROD-4
+title: A denial should end with the next command to run
+desc: |
+  Four lines, in order: who holds it, which of your paths collided, what it waits on, and a `ready` call naming you. A terse refusal is what sends an agent back to retry the same command in a loop.
+column: next
+order: 4096.0
+labels:
+  - feature
+priority: med
+estimate: 3
+blocked_by:
+  - PROD-3
+archived: false
+created: 2026-11-21T15:40:00
+updated: 2026-11-22T17:30:00

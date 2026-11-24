@@ -1,0 +1,15 @@
+id: PROD-5
+title: Write down that there are two kinds of 409 now
+desc: |
+  A stale token is a reload; a claim denial is not. Treat the second like the first and the client repaints the board and throws away the reason the claim failed.
+column: backlog
+order: 5120.0
+labels:
+  - docs
+priority: low
+estimate: 1
+blocked_by:
+  - PROD-4
+archived: false
+created: 2026-11-22T08:20:00
+updated: 2026-11-22T09:02:00

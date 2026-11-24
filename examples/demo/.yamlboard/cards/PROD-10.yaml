@@ -1,0 +1,18 @@
+id: PROD-10
+title: Say plainly that identity is honour-system
+desc: |
+  There is no auth anywhere in this project. A claim is a promise, and the only thing that makes it stick is that everyone else read the same board. A README that hides that is advertising a safety property the code does not have.
+column: backlog
+order: 10240.0
+labels:
+  - docs
+  - chore
+priority: med
+subtasks:
+  - text: limits section in the README
+    done: false
+  - text: the AGENTS.md block
+    done: false
+archived: false
+created: 2026-11-21T09:10:00
+updated: 2026-11-21T09:10:00

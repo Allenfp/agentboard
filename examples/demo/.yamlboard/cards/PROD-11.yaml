@@ -1,0 +1,12 @@
+id: PROD-11
+title: Renew before anything long
+desc: |
+  A claim you forgot to renew is not a claim you hold. The moment it lapses the card is ready again and someone else may take it with `preempted: you` written on their claim.
+column: backlog
+order: 11264.0
+labels:
+  - chore
+priority: low
+archived: false
+created: 2026-11-21T09:20:00
+updated: 2026-11-21T09:20:00

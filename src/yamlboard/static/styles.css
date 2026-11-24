@@ -1,0 +1,834 @@
+/* yamlboard -- theme tokens first, layout after. No frameworks, no fonts to fetch.
+ *
+ * Density (minimal | compact | full) is a display setting on <main data-density>;
+ * card tiles always render every part and CSS decides what shows, so switching
+ * density never re-runs the ops layer.
+ */
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --surface-3: #e4e7ec;
+  --border: #e2e5ea;
+  --border-strong: #cdd3dc;
+  --fg: #14181d;
+  --fg-soft: #3f4854;
+  --muted: #6b7480;
+  --accent: #0f766e;
+  --accent-soft: #d8f3ef;
+  --accent-fg: #ffffff;
+  --success: #15803d;
+  --warning: #b45309;
+  /* Warning text sits on a 15-20% tint of its own hue, where #b45309 only
+     clears 4.08:1; this darker shade keeps the amber cue and passes 4.5:1 on
+     the same tints. Dark's #e3b341 already clears 6.5:1, so it overrides. */
+  --warning-strong: #92400e;
+  --error: #b91c1c;
+  /* The card's left border is the only priority cue at minimal density, so it
+     has to hold up as a colour rather than a hint; each theme tunes these. */
+  --prio-urgent: #c2410c;
+  --prio-high: #b45309;
+  --prio-med: #0f766e;
+  --prio-low: #64748b;
+  /* JS supplies a per-agent colour for a live claim; this is what a card with no
+     claim reads as, and the value a chip falls back to when the agent id in the
+     file is not one of the people. #6d28d9 measures 7.10:1 on --surface and
+     6.23:1 on --surface-2, so the chip's text and its left-edge stripe survive
+     both places a claim renders. */
+  --claim: #6d28d9;
+  /* Ink that sits *on* --error (the conflict badge). White clears 6.47:1 on the
+     light red but only 2.52:1 on dark's #ff7b72, so this cannot be one value. */
+  --error-fg: #ffffff;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .08);
+  --shadow-lift: 0 6px 16px rgba(16, 24, 40, .11), 0 2px 5px rgba(16, 24, 40, .06);
+  --shadow-pop: 0 12px 34px rgba(16, 24, 40, .18), 0 2px 8px rgba(16, 24, 40, .1);
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-xs: 5px;
+  --radius-lg: 16px;
+  --lane: 132px;
+  --tile-gap: 9px;
+  /* Overlay ranks named once. A popover and a column menu used to share rank
+     46, so both could be up at once with no way to tell which was on top. */
+  --z-menu-scrim: 45;
+  --z-pop: 46;
+  --z-modal: 50;
+  --z-toast: 60;
+  /* A modal's backdrop and a control's inner hairline are the two places a
+     colour cannot come from `currentColor`; both are per-theme tokens rather
+     than literals sprinkled through the components. */
+  --scrim: rgb(5 7 10 / .55);
+  --ring: rgb(0 0 0 / .14);
+  /* A <select> arrow is a background image, so the colour is baked into the
+     URI and cannot inherit: the token holds the whole image, one per theme.
+     The stroke tracks --muted (#6b7680) because the previous literal measured
+     2.83:1 against --surface-3, under WCAG 1.4.11's 3:1 floor. */
+  --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236b7480' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  /* Without this the browser paints native <select> and date widgets light
+     while our text is light, which is unreadable in dark mode. */
+  color-scheme: light;
+}
+
+/* Classic dark: neutral grey text on near-black, one teal accent shared with the
+   light theme. fg clears 14:1 on the card surface and muted stays above 4.5:1
+   on every one, so the small chrome text is legible without a colour tint. */
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --surface-3: #2d333b;
+  --border: #30363d;
+  --border-strong: #444c56;
+  --fg: #e6edf3;
+  --fg-soft: #adbac7;
+  --muted: #8b949e;
+  --accent: #2dd4bf;
+  --accent-soft: #0e2a26;
+  --accent-fg: #04211c;
+  --success: #56d364;
+  --warning: #e3b341;
+  --warning-strong: var(--warning);
+  --error: #ff7b72;
+  --prio-urgent: #ff6b3d;
+  --prio-high: #e3b341;
+  --prio-med: #2dd4bf;
+  --prio-low: #93a7ba;
+  /* 9.37:1 on --surface, 8.24:1 on --surface-2; the light purple would be 1.9:1
+     here, which is why the token is per-theme rather than the same hue. */
+  --claim: #c4b5fd;
+  --error-fg: #161b22;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .5);
+  --shadow-lift: 0 8px 20px rgba(0, 0, 0, .55);
+  --shadow-pop: 0 18px 44px rgba(0, 0, 0, .65);
+  /* The light scrim composites the dark panel to 1.10:1 against it, so the
+     dialog floats on its border alone; black at .72 separates it properly. */
+  --scrim: rgb(0 0 0 / .72);
+  --ring: rgb(255 255 255 / .22);
+  --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b949e' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  color-scheme: dark;
+}
+
+/* `hidden` must survive component display rules: .badge is display:grid, which
+   otherwise beats the attribute and shows an empty dot. */
+[hidden] { display: none !important; }
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { display: flex; flex-direction: column; height: 100%; }
+
+code, kbd, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .9em; }
+kbd {
+  background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: var(--radius-xs); padding: 1px 5px; font-size: 11.5px; white-space: nowrap;
+}
+a { color: var(--accent); }
+.note { color: var(--muted); }
+.grow { flex: 1; }
+
+svg.i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ------------------------------------------------------------------- booting */
+
+#boot { margin: auto; text-align: center; color: var(--muted); padding: 4rem; }
+.boot-title { font-size: 20px; font-weight: 650; color: var(--fg); margin: 0 0 .4rem; }
+
+/* ---------------------------------------------------------------------- top */
+
+.top {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 14px; height: 52px; flex: none;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* The brand is the flex item that gives in a tight toolbar. Without min-width:0
+   on the text column, it keeps its min-content width and paints over the board
+   picker while the brand box itself collapses to the mark; kept as a column
+   with a rigid wordmark, it is the subtitle that truncates instead. */
+.brand > div { display: flex; flex-direction: column; min-width: 0; }
+.brand h1 { font-size: 15px; margin: 0; font-weight: 660; letter-spacing: -.015em; white-space: nowrap; flex: none; }
+.brand h1, .brand .subtitle { overflow: hidden; text-overflow: ellipsis; }
+.brand .mark {
+  width: 26px; height: 26px; border-radius: var(--radius-sm); flex: none;
+  display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-fg);
+}
+.brand .mark svg { width: 15px; height: 15px; }
+.subtitle { margin: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* Search sits in a pill of its own, so the toolbar reads as four groups
+   instead of thirteen controls. */
+.searchwrap {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface-2); border: 1px solid transparent;
+  border-radius: 999px; padding: 0 10px; height: 32px; width: 232px;
+  /* Floor for the single-row toolbar: below ~128px the input is unusable, and
+     the one-row layout stops at 1023px anyway (see the media query below). */
+  min-width: 128px;
+  color: var(--muted); transition: border-color .12s, background .12s, width .15s;
+}
+.searchwrap:focus-within { border-color: var(--accent); background: var(--surface); color: var(--fg); }
+.searchwrap input {
+  border: 0; background: transparent; padding: 0; height: 100%; width: 100%;
+  box-shadow: none; font-size: 13px; color: var(--fg);
+}
+.searchwrap input:focus { outline: none; }
+.searchwrap input::placeholder { color: var(--muted); }
+.searchwrap kbd { background: var(--surface); border-color: var(--border); font-size: 10px; padding: 0 4px; }
+
+.tools { display: flex; align-items: center; gap: 6px; }
+.tools.right { margin-left: auto; }
+
+.board-picker {
+  font-weight: 620; font-size: 13.5px; height: 32px;
+  padding: 0 26px 0 10px; border: 0; border-radius: var(--radius-sm);
+  /* A long board name is a flex item that would otherwise push the right-hand
+     tools off-screen; the select ellipsises what does not fit and the whole
+     name is still readable once the dropdown opens. */
+  max-width: 200px;
+  background: var(--surface-2); box-shadow: none; appearance: none;
+  background-image: var(--caret);
+  background-repeat: no-repeat; background-position: right 7px center; background-size: 13px;
+  cursor: pointer;
+}
+.board-picker:hover { background-color: var(--surface-3); }
+
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 5px 8px; color: var(--fg);
+  box-shadow: var(--shadow);
+}
+input:focus, select:focus, textarea:focus, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+input:disabled, select:disabled, textarea:disabled, button:disabled { opacity: .45; cursor: not-allowed; }
+textarea { resize: vertical; width: 100%; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+input[type="color"] { padding: 2px; width: 32px; height: 28px; }
+select {
+  appearance: none; padding-right: 24px;
+  background-image: var(--caret);
+  background-repeat: no-repeat; background-position: right 6px center; background-size: 12px;
+  cursor: pointer;
+}
+input[type="date"]::-webkit-calendar-picker-indicator { opacity: .55; cursor: pointer; }
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: .6; }
+
+button {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 5px 10px; height: 32px;
+  box-shadow: var(--shadow); cursor: pointer; white-space: nowrap; font-size: 13px;
+  transition: background .1s, color .1s, border-color .1s;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button.ghost { background: transparent; box-shadow: none; color: var(--muted); border-color: transparent; }
+button.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+/* An active filter keeps its accent cue under the cursor: button:hover outranks
+   .on, so the active state has to say itself again as a hover. */
+button.ghost.on { background: var(--accent-soft); color: var(--accent); }
+button.ghost.on:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+button.icon { padding: 0; width: 32px; justify-content: center; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 620; }
+button.primary:hover:not(:disabled) { filter: brightness(1.07); background: var(--accent); }
+button.danger { color: var(--error); border-color: transparent; background: transparent; box-shadow: none; }
+button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 12%, transparent); }
+button.on { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); font-weight: 620; }
+button.commit.dirty { border-color: color-mix(in srgb, var(--warning) 55%, transparent); color: var(--warning); font-weight: 620; }
+button .ahead { font-size: 11px; opacity: .8; }
+
+/* A badge turns "Filter" into a status readout: you can see at a glance that
+   the board is filtered without reading the dropdowns. */
+.badge {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-fg);
+  font-size: 10.5px; font-weight: 700; display: grid; place-items: center;
+}
+/* The count rides --error, not --accent like a filter badge: this number is two
+   agents about to overwrite each other. The ink is a token because white clears
+   6.47:1 on light's #b91c1c and only 2.52:1 on dark's #ff7b72. */
+.conflicts .badge { background: var(--error); color: var(--error-fg); }
+button.conflicts {
+  height: 28px; gap: 5px; font-size: 12px; font-weight: 620;
+  color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+button.conflicts:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error);
+}
+
+/* The browser's identity: a labelled pill in the right-hand group rather than a
+   bare select, because the name in it is the name `c` claims cards as, and a
+   shortcut whose identity is a mystery is a way to mislabel other people's
+   work. A real <label>, so the click target and the name come for free. */
+.agent-wrap {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px 0 9px;
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 999px;
+  cursor: pointer; transition: border-color .12s, background .12s;
+}
+.agent-wrap:hover { background: var(--surface-3); }
+.agent-wrap:focus-within { border-color: var(--accent); background: var(--surface); }
+.agent-key {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted);
+}
+.agent-picker {
+  border: 0; background: transparent; box-shadow: none; padding: 0 16px 0 0; height: auto;
+  font-size: 12.5px; font-weight: 620; color: var(--fg); appearance: none;
+  background-image: var(--caret); background-repeat: no-repeat;
+  background-position: right 1px center; background-size: 11px;
+  max-width: 116px; cursor: pointer;
+}
+.agent-picker:focus { outline: none; }
+
+.segmented { display: flex; background: var(--surface-2); border-radius: var(--radius-sm); padding: 2px; gap: 2px; }
+.segmented .seg {
+  border: 0; border-radius: var(--radius-xs); box-shadow: none; background: transparent;
+  padding: 0 11px; height: 28px; color: var(--muted); font-size: 12.5px; font-weight: 550;
+}
+.segmented .seg:hover:not(:disabled) { background: var(--surface-3); color: var(--fg); }
+.segmented .seg.on { background: var(--surface); color: var(--fg); font-weight: 640; box-shadow: var(--shadow); }
+
+.busy { width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.busy.on { background: var(--accent); animation: pulse .8s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* A quiet board and an unreachable server otherwise look identical, so the
+   toolbar says it out loud once two polls in a row go unanswered. */
+.offline { font-size: 11px; font-weight: 640; color: var(--warning); }
+
+/* ---------------------------------------------------------------- popovers */
+
+/* `fixed`, not `absolute`: the position comes from getBoundingClientRect(),
+   which is viewport-relative, so `absolute` only agreed with the maths for as
+   long as the page could not scroll. */
+.pop {
+  position: fixed; z-index: var(--z-pop); min-width: 216px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-pop); padding: 6px; display: none;
+}
+.pop.open { display: block; }
+.pop-group + .pop-group { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+.pop-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted); padding: 5px 8px 3px;
+}
+.pop-row { display: flex; align-items: center; gap: 8px; padding: 3px 8px; }
+.pop-row > span:first-child { flex: none; width: 62px; font-size: 12px; color: var(--muted); }
+.pop-row select, .pop-row input { flex: 1; min-width: 0; height: 28px; font-size: 12.5px; }
+.pop-foot { display: flex; gap: 6px; padding: 6px 8px 3px; }
+.pop-foot button { height: 28px; font-size: 12.5px; flex: 1; justify-content: center; }
+.pop-hint { margin: 4px 9px 7px; font-size: 11.5px; line-height: 1.45; color: var(--muted); max-width: 250px; }
+.menu-item.on { color: var(--accent); font-weight: 640; }
+.menu-item.on::before { content: "✓ "; }
+
+/* --------------------------------------------------------------------- main */
+
+.main { flex: 1; overflow: auto; padding: 14px; }
+
+.empty { max-width: 460px; margin: 8vh auto; text-align: center; color: var(--muted); }
+.empty h2 { color: var(--fg); margin: 0 0 .4rem; font-size: 18px; }
+.empty p { margin: .3rem 0 .9rem; }
+
+/* --------------------------------------------------------------- board grid */
+
+.grid { display: grid; gap: 10px; align-items: start; min-width: min-content; }
+
+.col-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 2px 4px 0; min-width: 0;
+}
+.col-head.invisible { visibility: hidden; }
+.col-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--col, var(--muted)); flex: none; }
+.col-name { font-weight: 640; font-size: 12.5px; letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-count {
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+  background: var(--surface-2); border-radius: 999px; padding: 0 6px; min-width: 20px; text-align: center;
+}
+.col-count.over { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning-strong); font-weight: 700; }
+.tag.done {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+  color: var(--success); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px;
+}
+.col-menu { border: 0; background: transparent; box-shadow: none; padding: 0 3px; height: 20px; width: 20px; color: var(--muted); font-size: 15px; line-height: 1; margin-left: -2px; }
+.col-menu:hover { background: var(--surface-2); }
+
+.col-body {
+  display: flex; flex-direction: column; gap: var(--tile-gap);
+  min-height: 58px; padding: 7px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  border: 1px solid transparent; transition: background .12s, border-color .12s;
+}
+.col-body:hover { background: var(--surface); border-color: var(--border); }
+.col-body.drag-over { background: var(--accent-soft); border-color: var(--accent); }
+.col-empty { margin: 4px 2px; color: var(--muted); font-size: 12px; font-style: italic; }
+.quick-add { align-self: stretch; box-shadow: none; background: transparent; border-style: dashed; color: var(--muted); font-size: 12.5px; justify-content: center; }
+.quick-add:hover { color: var(--accent); border-color: var(--accent); background: transparent; }
+.add-col { background: transparent; border: 0; min-height: 0; padding: 0; }
+
+.add-column { width: 100%; }
+
+.lane-corner { min-height: 1px; }
+.lane-label {
+  display: flex; align-items: center; gap: 6px; padding-top: 3px;
+  font-size: 11.5px; font-weight: 640; color: var(--muted);
+  position: sticky; left: 0; z-index: 1;
+  /* Sticky and opaque, or the column bodies scroll through the gaps between the
+     glyphs; the rail pins fine on its own (measured 400px of travel). */
+  background: var(--bg);
+}
+.lane-label .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+
+.drop-hint { height: 2px; border-radius: 2px; background: var(--accent); margin: -3px 2px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* --------------------------------------------------------------------- card */
+
+.card {
+  position: relative; display: block; width: 100%; text-align: left;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--prio, transparent);
+  border-radius: var(--radius); padding: 9px 10px 9px 11px;
+  cursor: pointer; box-shadow: var(--shadow);
+  transition: box-shadow .12s, border-color .12s, transform .06s;
+}
+/* --prio is always set on the tile (transparent when no priority), so a
+   fallback here would only ever make a stripe-less card gain an accent stripe
+   on hover. */
+.card:hover { box-shadow: var(--shadow-lift); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); border-left-color: var(--prio); }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card.dragging { opacity: .35; cursor: grabbing; }
+.card.archived { opacity: .6; }
+.card.overdue { border-left-color: var(--error); }
+
+/* ---- coordination state on a card. Every one of these is a class app.js
+   copies from the payload's own `state`/`live`/`overlaps`; nothing here is a
+   judgement about who holds what. --claim arrives as an inline custom property
+   on the tile (the agent's own colour), so the fallback below is what a card
+   nobody holds looks like, and a fallback is correct only because --claim is
+   legitimately absent there — unlike --prio, which the tile always sets. */
+.card.claimed { border-left-color: var(--claim, var(--accent)); }
+/* Ready is the one state an agent acts on, so it has to read at a glance from
+   across the room: --accent at 70% over --border is 3.40:1 against the card in
+   light and 5.73:1 in dark, clear of WCAG 1.4.11's 3:1 floor for a non-text
+   cue while staying quieter than a claimed card's saturated edge. */
+.card.ready-look { border-color: color-mix(in srgb, var(--accent) 70%, var(--border)); }
+/* Blocked is quiet on purpose: the `.blockers` pill says which cards, and a
+   heavy treatment would compete with the red that means "two agents are about to
+   collide". .8 keeps the title above 9:1 in both themes after compositing. */
+.card.blocked { opacity: .8; }
+.card.blocked .card-title { font-weight: 500; }
+/* A collision outranks the claim it collides with: the stripe is the loudest
+   thing on the tile and this is the one state that costs real work to ignore. */
+.card.overlaps { border-left-color: var(--error); }
+.card.overlaps.ready-look { border-color: color-mix(in srgb, var(--error) 70%, var(--border)); }
+
+.card-top { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.card-id { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; letter-spacing: -.02em; color: var(--muted); }
+.card-link { text-decoration: none; display: inline-flex; }
+.card-title { margin: 0; font-size: 13.5px; font-weight: 550; line-height: 1.4; overflow-wrap: anywhere; color: var(--fg); }
+.card-foot { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; color: var(--muted); }
+
+/* Description preview, full density only. Clamped rather than sliced in JS so
+   the number of lines adapts to the column width. */
+.card-desc {
+  margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--fg-soft);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-line; overflow-wrap: anywhere;
+}
+
+.labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 560; line-height: 16px; padding: 0 7px 0 5px; border-radius: 999px;
+  /* Label colours are user-picked, so the hue is pulled toward the theme text
+     colour: a raw #0f766e on its own 13% tint is 3.16:1 in dark. The tint and
+     border stay pure so the chip still reads as the label's colour. */
+  color: color-mix(in srgb, var(--c) 55%, var(--fg));
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 30%, transparent);
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.chip-sm { font-size: 10.5px; line-height: 15px; padding: 0 6px 0 5px; }
+
+/* tiny meta pills: points, due date, counts */
+/* --prio is on the card tile; list rows have no such ancestor and fall back. */
+.prio { text-transform: capitalize; font-weight: 640; font-size: 11px; color: var(--prio, var(--muted)); }
+.due, .est, .meta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-variant-numeric: tabular-nums; font-size: 11px;
+  background: var(--surface-2); border-radius: var(--radius-xs); padding: 1px 5px; color: var(--fg-soft);
+}
+/* Text on the amber tint needs --warning-strong (light 5.76:1); the tint keeps
+   --warning so the cue stays the same hue. Dark's --warning already clears 6.5. */
+.due.soon { color: var(--warning-strong); background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.due.over { color: var(--error); background: color-mix(in srgb, var(--error) 15%, transparent); font-weight: 640; }
+.meta-done { color: var(--success); }
+
+.avatar {
+  width: 21px; height: 21px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  font-size: 9.5px; font-weight: 700; color: #fff; letter-spacing: -.02em;
+  /* The ring follows the swatch's own luminance (app.js picks `.on-light` from
+     it), not the theme: a white hairline is invisible on a pale pick in either
+     theme and a dark one is invisible on a deep pick, so this pair is keyed to
+     the colour the person chose. */
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18);
+}
+.avatar.anon { background: var(--surface-2); color: var(--muted); box-shadow: none; }
+.avatar.on-light { color: #0b0f14; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18); }
+
+/* Density decides what a tile shows. The left border already carries priority,
+ * so minimal drops the words and keeps the colour. */
+
+.main[data-density="minimal"] .card { padding: 8px 10px; }
+.main[data-density="minimal"] .card-top,
+.main[data-density="minimal"] .card-foot .prio,
+.main[data-density="minimal"] .card-foot .due,
+.main[data-density="minimal"] .card-foot .est,
+.main[data-density="minimal"] .card-foot .meta,
+.main[data-density="minimal"] .card-desc { display: none; }
+.main[data-density="minimal"] .card-foot { margin-top: 5px; }
+/* The claim chip and the blocker note are deliberately absent from the list
+   above: who holds a file is the one fact that stays worth its pixels when
+   everything decorative is dropped, which is the whole reason minimal exists. */
+/* --claim is set inline by app.js from the agent's own colour; --muted is the
+   fallback for a claim whose agent the board has never heard of. */
+.claim {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 640; font-variant-numeric: tabular-nums;
+  line-height: 17px; padding: 0 6px 0 2px; border-radius: 999px;
+  /* Text is pulled toward the theme's ink the way .chip does it, because agent
+     colours are picked by hand: #452184 on a 13% tint of itself measures 9.39:1
+     in light and #d3cef8 8.79:1 in dark, so a pale pick cannot sink the chip. */
+  color: color-mix(in srgb, var(--claim, var(--muted)) 55%, var(--fg));
+  background: color-mix(in srgb, var(--claim, var(--muted)) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--claim, var(--muted)) 30%, transparent);
+  white-space: nowrap; max-width: 100%; overflow: hidden;
+}
+.claim .avatar { width: 17px; height: 17px; font-size: 8.5px; }
+/* Under a quarter of this claim's own TTL: the same amber as a due date that is
+   about to be a problem. --warning-strong carries the text (5.76:1 on the tint
+   in light, 6.59:1 in dark) while the tint keeps --warning's hue. */
+.claim.low {
+  color: var(--warning-strong);
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+}
+/* Expired is not "free, more or less": until the server stops calling the claim
+   live, this tab is showing a lock that may still be real. #b91c1c on its own
+   tint is 5.00:1 in light, #ff7b72 5.44:1 in dark. */
+.claim.gone {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+  border-color: color-mix(in srgb, var(--error) 34%, transparent);
+}
+.card.overlaps .claim, .claim.clashing {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
+}
+.blockers {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; color: var(--muted);
+  background: var(--surface-2); border-radius: var(--radius-xs); padding: 1px 5px;
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.blockers svg.i { width: 11px; height: 11px; }
+
+.main[data-density="compact"] .card-desc { display: none; }
+
+/* full shows everything the tile renders */
+
+/* --------------------------------------------------------------------- list */
+
+table.list { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+table.list th {
+  text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 700; padding: 8px 10px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+table.list td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.list tbody tr { cursor: pointer; }
+table.list tbody tr:hover { background: var(--surface-2); }
+table.list tbody tr:last-child td { border-bottom: 0; }
+table.list tr.archived { opacity: .6; }
+/* Rows are focusable so the list is reachable by keyboard; the tab stop needs
+   to show, and `outline` on a <tr> paints on the row box. */
+table.list tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.list td:first-child { color: var(--muted); white-space: nowrap; }
+.col-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--col, var(--muted)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--col, var(--muted)) 32%, transparent); white-space: nowrap; font-weight: 560; }
+
+.foot {
+  display: flex; flex: none; padding: 5px 14px; font-size: 11px; color: var(--muted);
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.file { font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ------------------------------------------------------------------- modals */
+
+.scrim {
+  position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: start center;
+  padding: max(4vh, 16px) 14px; overflow: auto;
+  background: var(--scrim); backdrop-filter: blur(3px) saturate(.9);
+  animation: fade .12s ease-out;
+}
+@keyframes fade { from { opacity: 0; } }
+.panel {
+  width: min(520px, 100%); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop); overflow: hidden;
+  animation: rise .14s cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes rise { from { transform: translateY(8px) scale(.99); opacity: 0; } }
+.panel.wide { width: min(780px, 100%); }
+.panel-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+.panel-head h2 { margin: 0; font-size: 14px; font-weight: 640; flex: 1; overflow-wrap: anywhere; }
+.panel-body { padding: 16px; max-height: min(70vh, 640px); overflow: auto; }
+.panel-foot { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--surface-2); }
+
+/* The card editor is a document, not a form: the title and the notes carry no
+   borders and the fields that matter are pills you click rather than labelled
+   boxes - the affordance is deliberately invisible until a control is focused,
+   where the accent ring says exactly what the keyboard has hold of. Settings
+   keeps the plain form treatment - that one is a form. */
+.doc-title {
+  width: 100%; border: 0; background: transparent; box-shadow: none; padding: 0;
+  font-size: 21px; font-weight: 660; letter-spacing: -.02em; line-height: 1.3; color: var(--fg);
+}
+.doc-title:focus { outline: none; }
+.doc-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.doc-title::placeholder { color: var(--muted); opacity: .6; }
+
+.doc-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 4px; }
+.pill-key { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; }
+.pill-col select { color: var(--col, var(--fg-soft)); font-weight: 640; }
+.pill-who { padding-left: 5px; }
+.pill-who::before {
+  content: ""; width: 15px; height: 15px; border-radius: 50%; flex: none;
+  background: var(--who, var(--surface-3)); box-shadow: inset 0 0 0 1px var(--ring);
+}
+.pill-prio select { text-transform: capitalize; font-weight: 640; }
+.pill {
+  display: inline-flex; align-items: center; gap: 5px; height: 29px; padding: 0 9px;
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 999px;
+  color: var(--fg-soft); font-size: 12.5px; cursor: pointer; transition: background .1s, border-color .1s;
+}
+.pill:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.pill > svg.i { color: var(--muted); width: 14px; height: 14px; }
+.pill select, .pill input {
+  border: 0; background: transparent; box-shadow: none; padding: 0; height: auto;
+  font-size: 12.5px; font-weight: 560; color: inherit; appearance: none;
+  background-image: none; max-width: 148px;
+}
+.pill select:focus, .pill input:focus { outline: none; }
+/* The pill is the field, so the pill takes the ring the control lost. */
+.pill:focus-within { border-color: var(--accent); background: var(--surface); }
+.pill input[type="date"] { width: 92px; }
+.pill input[type="number"] { width: 42px; text-align: center; }
+.pill-date input { font-variant-numeric: tabular-nums; }
+/* Number fields inside pills are content-width, so spin buttons would clip. */
+.pill input[type="number"]::-webkit-inner-spin-button,
+.pill input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; display: none; }
+.pill input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.panel-head .saved { flex: none; margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.panel-head .saved + button { margin-left: 4px; }
+
+.doc-desc {
+  width: 100%; border: 0; background: transparent; box-shadow: none; padding: 0;
+  margin: 10px 0 0; min-height: 76px; font-size: 13.5px; line-height: 1.6; resize: none;
+  font-family: inherit; color: var(--fg); overflow: hidden;
+}
+.doc-desc:focus { outline: none; }
+.doc-desc:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.doc-desc::placeholder { color: var(--muted); opacity: .65; }
+
+.doc-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.doc-section > h4 {
+  margin: 0 0 9px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* A link row opens, edits and deletes in place, so the row itself carries the
+   affordance; there is no separate read-only list of links. */
+.doc-rows { display: grid; gap: 5px; }
+.row-open { color: var(--muted); display: inline-flex; flex: none; padding: 2px; }
+.row-open:hover { color: var(--accent); }
+.saved::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--success); margin-right: 6px; vertical-align: 1px;
+}
+.saved.busy::before { background: var(--warning); }
+.saved.warn { color: var(--warning); }
+.saved.warn::before { background: var(--error); }
+
+.field { display: grid; gap: 4px; margin-bottom: 10px; }
+.field > span { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 660; }
+.field:last-child { margin-bottom: 0; }
+
+.pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.pick-item {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px 2px 5px;
+  transition: background .1s, border-color .1s;
+}
+.pick-item:hover { background: var(--surface-2); }
+.pick-item:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.pick-item input { margin: 0; accent-color: var(--accent); }
+.inline { display: inline-flex; align-items: center; gap: 5px; }
+
+.rows, .subs { display: grid; gap: 5px; margin-bottom: 6px; }
+.row { display: flex; gap: 6px; align-items: center; }
+.row .grow { flex: 1; min-width: 0; }
+.sub {
+  display: flex; align-items: center; gap: 9px; padding: 6px 9px;
+  background: var(--surface-2); border-radius: var(--radius-sm);
+  border: 1px solid transparent; transition: border-color .1s;
+}
+.sub:hover { border-color: var(--border); }
+.sub input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.sub:has(input:checked) .sub-text { color: var(--muted); text-decoration: line-through; }
+.sub-text { flex: 1; overflow-wrap: anywhere; font-size: 13px; }
+.sub button { height: 22px; width: 22px; padding: 0; font-size: 15px; line-height: 1; }
+
+.comments { display: grid; gap: 10px; margin-bottom: 10px; }
+.comment { border-left: 2px solid var(--border); padding-left: 10px; }
+.comment-head { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); }
+.comment-who { font-weight: 620; color: var(--fg); }
+.comment p { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.composer { display: flex; gap: 6px; align-items: center; }
+.composer input { flex: 1; }
+
+/* ---- the card modal's coordination block. Same class names as the tile, so a
+   claim cannot look like one thing on the board and another inside the card. */
+.claim-state { margin: 0 0 9px; font-size: 13px; color: var(--fg-soft); }
+.claim-state.overlaps { color: var(--error); font-weight: 620; }
+.claim-clash { margin: 0 0 9px; padding-left: 18px; font-size: 12px; line-height: 1.5; color: var(--error); }
+.claim-clash li { margin: 2px 0; overflow-wrap: anywhere; }
+.claim-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.claim-row select, .claim-row input, .claim-row button { height: 30px; font-size: 12.5px; }
+.claim-row select { font-weight: 600; }
+
+/* ---- the conflict ledger. One row per pair, winner on the left, because that
+   is the reading order of the decision: who keeps it, who loses it, then the one
+   button that writes the answer down. */
+.clash { border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 12px; margin-bottom: 10px; }
+.clash:last-child { margin-bottom: 0; }
+.clash.note-row { border-left: 3px solid var(--error); }
+.clash.note-row p { margin: 4px 0 0; font-size: 12.5px; }
+.clash-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: start; }
+.clash-vs { font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; padding-top: 3px; }
+.clash-side { min-width: 0; }
+/* Winner gets --accent, loser gets --error: after a clean merge these two agents
+   have nothing else to tell them who keeps the files, so the colour carries it.
+   5.47:1 (light) and 9.29:1 (dark) against the panel for the rule itself. */
+.clash-side.win { border-left: 3px solid var(--accent); padding-left: 9px; }
+.clash-side.lose { border-left: 3px solid var(--error); padding-left: 9px; }
+.clash-who { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.clash-who strong { font-weight: 660; }
+.clash-side p { margin: 4px 0 0; font-size: 11.5px; overflow-wrap: anywhere; }
+.clash-paths { margin: 9px 0 0; display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.clash-paths code {
+  font-size: 11.5px; background: var(--surface-2); border-radius: var(--radius-xs);
+  padding: 1px 6px; color: var(--fg-soft); overflow-wrap: anywhere;
+}
+.clash-foot { display: flex; justify-content: flex-end; margin-top: 9px; }
+
+/* The footer's counts live in their own span so paintCoordination() can move
+   them without redrawing the path a person may be reading or selecting. */
+.foot-stats { flex: none; padding-left: 10px; white-space: nowrap; }
+
+.settings { display: grid; grid-template-columns: 118px 1fr; gap: 14px; }
+.settings-nav { display: grid; gap: 3px; align-content: start; }
+.settings-nav .ghost { text-align: left; justify-content: flex-start; }
+/* Only the heavier weight is a settings-nav deviation; the accent fill and
+   text now come from button.ghost.on, which also keeps them under the cursor. */
+.settings-nav .ghost.on { font-weight: 640; }
+.settings-body h3 { margin: 18px 0 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+.settings-body h3:first-child { margin-top: 0; }
+.setting-row { display: flex; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.setting-row input[type="text"], .setting-row input:not([type]) { flex: 1; min-width: 110px; }
+.setting-row.add { border-bottom: 0; padding-top: 10px; }
+.setting-row .order { display: flex; gap: 2px; }
+.setting-row .note { min-width: 62px; font-size: 12px; }
+
+table.keys { width: 100%; border-collapse: collapse; }
+table.keys td { padding: 5px 8px 5px 0; vertical-align: top; font-size: 13px; }
+table.keys td:first-child { width: 148px; white-space: nowrap; }
+
+/* -------------------------------------------------------------------- menus */
+
+.menu-scrim { position: fixed; inset: 0; z-index: var(--z-menu-scrim); }
+.menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; box-shadow: none; padding: 6px 9px; border-radius: var(--radius-sm); height: auto; font-size: 13px; }
+.menu-item:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
+.menu-item.danger { color: var(--error); }
+.menu-item.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+
+/* ------------------------------------------------------------------- toasts */
+
+#toast-root { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: var(--z-toast); width: min(620px, calc(100vw - 28px)); }
+.toast {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 9px 11px;
+  font-size: 13px; animation: rise .16s cubic-bezier(.2, .8, .3, 1);
+}
+/* pre-line because a refused claim is the server's own four lines — holder, the
+   colliding pattern, the blocker, the next command — and a toast that flattened
+   them into one run-on sentence is a refusal worth retrying rather than reading.
+   No other toast carries a newline, so nothing else on screen moves. */
+.toast span { flex: 1; white-space: pre-line; }
+.toast.warn { border-left-color: var(--warning); }
+.toast.error { border-left-color: var(--error); }
+.toast.success { border-left-color: var(--success); }
+/* Height only: the button is emitted as "primary toast-action", and button.primary
+   already carries the accent background, text colour and weight. Anything
+   repeated here is repainted by button:hover, which outranks this rule and
+   would leave accent text on a grey chip. */
+.toast-action { height: 27px; }
+.toast-x { border: 0; background: transparent; box-shadow: none; color: var(--muted); font-size: 17px; line-height: 1; padding: 0 3px; height: 24px; width: 24px; }
+
+/* A single toolbar row needs about 815px once the brand is down to its mark and
+   the search pill is at its floor; below that the pill would be crushed to
+   nothing and the picker would sit on the title, so the pill takes a row of its
+   own instead. */
+@media (max-width: 1023px) {
+  .top { flex-wrap: wrap; height: auto; padding: 8px 10px; gap: 8px; }
+  .searchwrap { width: 100%; order: 5; }
+  .tools.right { margin-left: 0; }
+}
+
+@media (max-width: 760px) {
+  .main { padding: 10px; }
+  .panel-body { padding: 12px; }
+}
+
+/* Print: the app is a fixed-height window whose board scrolls inside .main, so
+   on paper it came out as one clipped page. On paper the sheet does the
+   scrolling, so every scroll container opens up, the columns keep their tiles
+   whole across a page break, and the screen-only chrome goes. */
+@media print {
+  html, body { height: auto; overflow: visible; }
+  #root { height: auto; }
+  .main { overflow: visible; padding: 0; }
+  .grid { min-width: 0; }
+  .card, .sub, .comment { break-inside: avoid; }
+  .top, .foot, #toast-root, #modal-root { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

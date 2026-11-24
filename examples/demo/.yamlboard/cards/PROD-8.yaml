@@ -1,0 +1,16 @@
+id: PROD-8
+title: A blocked_by cycle is refused and names the cycle
+desc: |
+  `dep add A --blocked-by B` then `dep add B --blocked-by A` used to write happily, and afterwards no two calls could agree on what was ready. The message has to contain both ids, or nobody finds the edge.
+column: next
+order: 8192.0
+labels:
+  - bug
+priority: urgent
+due: 2026-12-02
+estimate: 2
+fields:
+  risk: true
+archived: false
+created: 2026-11-21T08:00:00
+updated: 2026-11-22T18:05:00

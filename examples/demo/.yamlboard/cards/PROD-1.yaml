@@ -1,0 +1,26 @@
+id: PROD-1
+title: One file per card, so two agents stop rewriting line 1
+desc: |
+  The old store kept every card in one file and bumped one global `rev` on every write, so two clones touching two unrelated cards still collided - in the app with a 409, and in git because both rewrote the same line. A card is a filename now, so an unrelated card is an unrelated path and git merges it without being asked.
+column: done
+order: 1024.0
+labels:
+  - feature
+priority: high
+assignee: ada
+estimate: 5
+links:
+  - url: https://github.com/Allenfp/yamlboard
+    title: the repo
+subtasks:
+  - text: split the store into board.yaml + cards/
+    done: true
+  - text: per-file tokens
+    done: true
+comments:
+  - at: 2026-11-18T09:12:00
+    by: grigory
+    text: Two clones, two cards, one clean merge. Verified.
+archived: false
+created: 2026-11-14T10:00:00
+updated: 2026-11-21T14:03:00

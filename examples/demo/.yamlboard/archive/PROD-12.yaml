@@ -1,0 +1,18 @@
+id: PROD-12
+title: The whole-file document reader
+desc: |
+  Superseded by the per-card store. Kept in archive/ rather than deleted so the history still explains where `rev` went.
+column: done
+order: 12288.0
+labels:
+  - chore
+priority: none
+assignee: ada
+comments:
+  - at: 2026-11-22T16:00:00
+    by: ada
+    text: 'Archived, not deleted: this card is the paperwork for `rev`.'
+released_by: ada
+archived: true
+created: 2026-11-19T15:40:00
+updated: 2026-11-22T16:00:00

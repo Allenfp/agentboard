@@ -1,0 +1,15 @@
+id: PROD-9
+title: The ready queue is the only thing an agent is told to pick from
+desc: |
+  Unclaimed, unblocked, and free of every live claim's paths, ordered by priority then age. Everything else stays visible - an agent that cannot see what it is shut out of cannot argue with the answer.
+column: backlog
+order: 9216.0
+labels:
+  - feature
+priority: med
+estimate: 2
+fields:
+  risk: false
+archived: false
+created: 2026-11-21T09:00:00
+updated: 2026-11-21T09:00:00
