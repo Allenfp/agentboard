@@ -278,7 +278,30 @@ function ownBytes(card) {
   if (!card) return card;
   const rest = { ...card };
   for (const key of DERIVED) delete rest[key];
+  // `assignee` is a content field a person can set, but claiming writes it too,
+  // so a difference there is not evidence of an edit on its own: movedFiles
+  // consults assigneeChange() and counts only a genuinely hand-edited name.
+  delete rest.assignee;
   return rest;
+}
+
+/**
+ * Which way `assignee` moved between two payloads of one card, if it moved.
+ *
+ * `claim` writes `assignee` and `release` clears it, so a lease moving also moves
+ * that field: coordination traffic wearing a content field's clothes. Compared
+ * verbatim it reads as a person editing the card, and N agents' claims would put
+ * "changed on disk" on this screen every poll. The move is lease-driven only if
+ * `assignee` agrees with each side's own claim on BOTH sides -- claim sets it to
+ * the holder, release clears it with the claim gone. A name that matches nobody's
+ * lease (assignee grigory while ada holds it) is a hand-edit and still counts.
+ */
+function assigneeChange(before, now) {
+  const was = before?.assignee ?? null;
+  const is = now?.assignee ?? null;
+  if (was === is) return "same";
+  const agrees = (c) => (c?.assignee ?? null) === (c?.claim?.agent ?? null);
+  return agrees(before) && agrees(now) ? "lease" : "edit";
 }
 
 /**
@@ -303,8 +326,10 @@ function movedFiles(before, state) {
     if (!old) { news.added.push(id); continue; }        // a card appeared
     const tokenMoved = (before.tokens?.[id] || "") !== (state.tokens?.[id] || "");
     if (!tokenMoved) continue;
-    const sameExceptClaim = JSON.stringify(ownBytes(old)) === JSON.stringify(ownBytes(card));
-    (sameExceptClaim ? news.claims : news.content).push(id);
+    const restSame = JSON.stringify(ownBytes(old)) === JSON.stringify(ownBytes(card));
+    const who = assigneeChange(old, card);
+    if (who === "lease") { news.claims.push(id); news.rebuild = true; continue; }
+    (restSame && who === "same" ? news.claims : news.content).push(id);
   }
   for (const id of was.keys()) if (!now.has(id)) news.gone.push(id);   // deleted or archived
   /* Nothing on this path wrote a card: `ready` and `conflicts` are computed per

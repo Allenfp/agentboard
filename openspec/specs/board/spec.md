@@ -10,34 +10,18 @@ records the baseline the agent-coordination rewrite deviates from.
 ## Requirements
 
 ### Requirement: The file is the board
-The system SHALL keep the entire board — schema version, title, revision counter,
-people, labels, board definitions and cards — in one YAML file, and SHALL have no
-database, server-side state, account, or build step. Reads SHALL load it with
-ruamel round-trip mode and writes SHALL serialise through the same mode so
-comments, key order and block scalars survive byte-for-byte.
+The system SHALL keep a board in a tracked directory of small files rather than one
+document: board configuration in one file, each card in a file of its own. Reads and
+writes SHALL preserve comments, key order and block scalars in every file they
+touch. There SHALL be no database, server-side state, account, or build step.
 
 #### Scenario: A hand edit survives an app write
-- **WHEN** a person adds a YAML comment and edits a card in Vim, then edits another card in the browser
-- **THEN** the comment and the hand edit are still present, and no unrelated key was reordered or reflowed
+- **WHEN** a person adds a YAML comment and edits a card by hand, then edits another card in the browser
+- **THEN** the comment and the hand edit are still present, and no unrelated file was rewritten
 
 #### Scenario: Nothing is written when nothing changed
-- **WHEN** an op is applied that results in byte-identical serialised output
-- **THEN** the store performs no write and the file's mtime and size are unchanged
-
-### Requirement: File resolution and creation
-`yamlboard` SHALL resolve the file from its positional argument, then
-`$YAMLBOARD_FILE`, then `./boards.yaml`. Serving a missing file SHALL be legal and
-the file SHALL be created on the first save. `--check` and `--print` are read-only
-inspections, so a missing file SHALL be an error with exit code 2 rather than an
-empty board.
-
-#### Scenario: First run in an empty directory
-- **WHEN** a person runs `yamlboard boards.yaml` where no such file exists and then creates a card
-- **THEN** the file is created and contains the card
-
-#### Scenario: Checking a file that is not there
-- **WHEN** `yamlboard --check missing.yaml` is run
-- **THEN** the exit code is 2 and no file is created
+- **WHEN** an operation results in byte-identical serialised output
+- **THEN** the system performs no write and the file's modification time is unchanged
 
 ### Requirement: Validation before write
 Every write SHALL be validated in full before it reaches disk, and an invalid
@@ -91,25 +75,25 @@ hand-written id is never re-issued.
 - **WHEN** `next_card` says 4 but `PROD-9` exists in the file
 - **THEN** the next card created is `PROD-10`
 
-### Requirement: Optimistic concurrency with rev and token
-Every write SHALL carry the `rev` it was based on (a counter every app write
-bumps) and a `token`, an opaque stamp of the exact bytes the client was looking
-at. A mismatch SHALL return HTTP 409 carrying the complete fresh state including
-git status; the client SHALL adopt it and repaint rather than retry. A concurrent
-read-modify-write SHALL be serialised by an `fcntl` lock. A hand edit or `git pull`
-does not bump `rev` but does move `token`, so a stale write still bounces.
+### Requirement: Optimistic concurrency with per-file tokens
+Every write SHALL carry a token, an opaque stamp of the exact bytes of the file it was based on. A mismatch SHALL be refused with the current content of what it conflicts with, and the client SHALL adopt it rather than retry. Concurrent writes to the same file SHALL be serialised by a lock. There SHALL be no board-wide revision counter: writes to different cards are independent, and a hand edit or pull to one card does not invalidate work on another.
 
 #### Scenario: Two tabs race
-- **WHEN** two tabs post writes based on the same `rev`
-- **THEN** one wins and the other receives 409 with the current document and reloads
+- **WHEN** two writers post changes to the same card based on the same bytes
+- **THEN** one wins and the other is refused with the current content and refreshes
+
+#### Scenario: Unrelated cards do not collide
+- **WHEN** two clones write different cards and merge
+- **THEN** both writes survive with no conflict to resolve
 
 #### Scenario: A hand edit is protected
-- **WHEN** a file is edited outside the app and a tab then posts a write based on the pre-edit bytes
-- **THEN** the write is refused with 409 and the hand edit survives
+- **WHEN** a card file is edited outside the app and a writer then posts a change based on the pre-edit bytes
+- **THEN** that write is refused and the hand edit survives
 
 ### Requirement: The browser never decides
-Every interaction SHALL be an op posted to `/api/apply {op,args,rev,token}`; the
-25 registered ops (`card.create`, `card.move`, `column.delete`, …) SHALL be the
+Every interaction SHALL be an op posted to `/api/apply {op,args,tokens}`, where
+`tokens` names each file the client read (`"board"` plus every card id); the
+33 registered ops (`card.create`, `card.move`, `column.delete`, …) SHALL be the
 only mutations, and the returned document SHALL replace the client's copy.
 Ordering, id allocation and validation SHALL live in exactly one place, server-side.
 
@@ -139,12 +123,18 @@ under `yb.*` and SHALL never be written to the board file.
 
 ### Requirement: Keyboard shortcuts
 The UI SHALL be operable from the keyboard: `n` new card, `/` search, `a` archive,
-`b`/`l` board/list, `d` density, `f` filters, `s` settings, `t` theme, `?` for the
-full list. The key handler and the README's shortcut table SHALL always agree.
+`b`/`l` board/list, `d` density, `f` filters, `s` settings, `t` theme, `r` the
+ready filter, `c` claim the focused card as the browser's chosen agent, `?` for the
+full list. The key handler, the in-app shortcut list and the README's shortcut table
+SHALL always agree.
 
 #### Scenario: The documented list is the real list
 - **WHEN** a shortcut is added or removed
-- **THEN** the README table changes in the same commit
+- **THEN** the README table and the in-app list change in the same commit
+
+#### Scenario: Take it from the keyboard
+- **WHEN** a ready card is focused and `c` is pressed
+- **THEN** the claim is written server-side and the card shows the claim without a reload
 
 ### Requirement: Commit button
 The UI SHALL offer a commit that stages only the board file and commits it with the
@@ -172,10 +162,15 @@ authentication. Host and Origin checks SHALL derive from the single
 - **THEN** every POST is refused, the client disables write controls, and a caller's success check cannot report a save that never happened
 
 ### Requirement: Exit codes
-The CLI SHALL exit `0` on success, `1` when it cannot listen, `2` for a bad file,
-a bad flag or a refused setting, `130` when interrupted, and `141` when the reader
-of a pipe goes away.
+The CLI SHALL exit `0` on success, `1` when it cannot listen, `2` for a bad file, a
+bad flag, or a refused operation, `3` when a claim is denied because another agent
+holds the work, `130` when interrupted, and `141` when the reader of a pipe goes
+away.
+
+#### Scenario: A denied claim is distinguishable
+- **WHEN** a claim is refused because another agent holds the card
+- **THEN** the exit status is the claim-denied code and not the general failure code
 
 #### Scenario: A pipe closes early
-- **WHEN** `yamlboard --print boards.yaml | head -1` is run on a large file
-- **THEN** the process exits 141 without a Python traceback
+- **WHEN** machine-readable output is piped to a reader that exits early
+- **THEN** the process exits with the broken-pipe status and prints no traceback

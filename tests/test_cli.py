@@ -1288,6 +1288,138 @@ class TestSkillInstall(Board):
 # the shipped entry point, as a real process
 # --------------------------------------------------------------------------- #
 
+class TestMigrateFidelity(Board):
+    """``migrate`` is the only bridge from v1, and there is no reader behind it.
+
+    A silent loss here is unrecoverable in the worst way: the v1 file still looks
+    fine on disk, so nobody notices the card that did not arrive until someone
+    looks for it months later. So every field the old shape carried is asserted on
+    the way out, and the source file is asserted untouched.
+    """
+
+    V1 = """\
+version: 1
+title: Product
+people:
+  - id: ada
+    name: Ada
+    color: "#7c8797"
+  - id: grigory
+    name: Grigory
+labels:
+  - id: bug
+    name: Bug
+boards:
+  - id: product
+    key: PROD
+    title: Product
+    next_card: 7
+    columns:
+      - id: backlog
+        name: Backlog
+      - id: doing
+        name: Doing
+        wip_limit: 2
+      - id: done
+        name: Done
+        is_done: true
+    custom_fields:
+      - id: customer
+        name: Customer
+        type: select
+        options: [Acme, Globex]
+    cards:
+      - id: PROD-1
+        title: Ship the API
+        desc: |
+          line one
+          line two
+        column: doing
+        labels: [bug]
+        priority: urgent
+        assignee: ada
+        due: 2026-12-01
+        estimate: 3
+        fields:
+          customer: Acme
+      - id: PROD-6
+        title: Already shipped
+        column: done
+        archived: true
+"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.source = Path(self._tmp.name) / "old.yaml"
+        self.source.write_text(self.V1, encoding="utf-8")
+        self.original = self.source.read_bytes()
+        self.target = Path(self._tmp.name) / "fresh"
+        self.target.mkdir()
+
+    def test_every_field_survives_and_the_source_is_left_alone(self) -> None:
+        code, out, err = self.yb("migrate", str(self.source), "--dir", str(self.target))
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("2 card(s)", out)
+        self.assertEqual(self.source.read_bytes(), self.original,
+                         "migrate rewrote the file it was only supposed to read")
+
+        arrived = store.Store(self.target)
+        self.assertEqual(model.validate(arrived.read_board().doc), [])
+        board = arrived.read_board().doc["boards"][0]
+        self.assertEqual(board["key"], "PROD")
+        # the counter must clear the highest migrated id, or the next create
+        # re-issues PROD-6 and a merge loses one of them
+        self.assertGreaterEqual(board["next_card"], 7)
+        self.assertEqual([c["id"] for c in model.columns(board)],
+                         ["backlog", "doing", "done"])
+        self.assertTrue(model.is_done_column(board, "done"))
+        self.assertEqual(model.find_column(board, "doing")["wip_limit"], 2)
+        self.assertEqual([f["id"] for f in board["custom_fields"]], ["customer"])
+        self.assertEqual([p["id"] for p in arrived.read_board().doc["people"]],
+                         ["ada", "grigory"])
+        self.assertEqual([lbl["id"] for lbl in arrived.read_board().doc["labels"]],
+                         ["bug"])
+
+        one = arrived.read_card("PROD-1").doc
+        self.assertEqual(one["title"], "Ship the API")
+        self.assertEqual(one["column"], "doing")
+        self.assertEqual(one["priority"], "urgent")
+        self.assertEqual(one["assignee"], "ada")
+        self.assertEqual([str(x) for x in one["labels"]], ["bug"])
+        self.assertEqual(one["estimate"], 3)
+        self.assertEqual(one["due"], datetime.date(2026, 12, 1))
+        self.assertEqual(one["desc"], "line one\nline two\n")
+        self.assertEqual(dict(one["fields"]), {"customer": "Acme"})
+
+        # an archived card lives under archive/: the directory is part of the
+        # meaning, and a card in cards/ saying archived: true renders as live
+        self.assertTrue(arrived.card_path("PROD-6", archived=True).is_file())
+        self.assertFalse(arrived.card_path("PROD-6").exists())
+        self.assertTrue(arrived.read_card("PROD-6").doc["archived"])
+
+    def test_a_second_board_in_the_one_file_is_refused_not_silently_dropped(self) -> None:
+        """Two boards cannot share one store without renaming every card id.
+
+        Importing the first and ignoring the second would report success while
+        quietly discarding a whole board's cards.
+        """
+        self.source.write_text(
+            self.source.read_text(encoding="utf-8")
+            + "  - id: personal\n    key: PER\n    title: Personal\n"
+              "    columns:\n      - id: todo\n        name: To do\n    cards: []\n",
+            encoding="utf-8")
+        code, _, err = self.yb("migrate", str(self.source), "--dir", str(self.target))
+        self.assertEqual(code, cli.EXIT_USAGE, err)
+        self.assertIn("2 boards", err)
+        self.assertEqual(list(self.target.iterdir()), [], "it wrote a partial store")
+
+    def test_migrating_into_a_live_store_needs_force(self) -> None:
+        """An overwrite is unrecoverable; "already initialised" is not."""
+        code, _, err = self.yb("migrate", str(self.source), "--dir", str(self.repo))
+        self.assertEqual(code, cli.EXIT_USAGE, err)
+        self.assertEqual(self.store.card_ids(), [], "the refused migrate wrote cards")
+
+
 class TestRealProcess(Board):
     """Only what cannot be true in-process: a real exit status from
     ``python -m yamlboard.cli``, and git's view of the files afterwards.
