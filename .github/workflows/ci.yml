@@ -5,37 +5,175 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  check:
+  static:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Pinned to a commit, not a tag: `@v7` is a moving ref, and a workflow that
+      # follows one re-executes whatever that tag points at today. The comment
+      # names the release the SHA is, so a bump is one line to review.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # v7 is the highest tag this action publishes: it ships v10.0.0, v10.4.0
-      # and so on, but no bare `v10`, so `@v10` fails to resolve at checkout
-      # time. v7 is the one that runs on node24; v6 is still node20, which
+      # v7 is the highest tag this action publishes under a round number: it
+      # ships v10.0.0, v10.4.0 and so on with no bare `v10`, so `@v10` fails to
+      # resolve at checkout time. v7 runs on node24; v6 is still node20, which
       # GitHub is retiring.
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
-          # The floor `pyproject.toml` advertises, not whatever uv happens to
-          # fetch. One interpreter meant a 3.12+-only stdlib call (`itertools.
-          # batched`, `Path.walk`) would ship green on the version uv happened
-          # to fetch, and fail for everyone else.
           python-version: "3.11"
 
-      # `--frozen`, not a fresh resolve: a workflow that re-resolves dependencies
-      # passes on the day the lock file is stale and fails locally, which is the
-      # wrong way round for the check meant to catch exactly that.
+      # `--frozen`, not a fresh resolve: a workflow that re-resolves passes on the
+      # day the lock file goes stale and fails locally, which is the wrong way
+      # round for the check meant to catch exactly that.
       - run: uv sync --frozen --group dev
 
+      # The rule set is the house style (CONVENTIONS P6, P16) with zero open
+      # findings, so this is a gate and not a report.
       - run: uv run --group dev ruff check src tests
 
-      - run: uv run pytest -q
+      # `src` only, and that is deliberate: the JS harness stubs under tests/ have
+      # 98 findings of their own. See [tool.pyright].
+      - run: uv run --group dev pyright
 
-      # The example board is documentation that runs: README tells people to
-      # `list` it. `conflicts` is deliberately not run here -- examples/demo ships
-      # a live overlap to teach what the report looks like, so it exits 2 on a
-      # healthy repo, and a gate that is red on a good commit gets ignored.
-      - run: uv run python -m yamlboard.cli list --dir examples/demo
-      - run: uv run python -m yamlboard.cli skill path
+      # Supply chain. `ruamel.yaml` is the single runtime dependency, so an audit
+      # that goes quiet is a real change. The requirements file comes from the
+      # lock because `--require-hashes` wants a hash per line, which `uv export`
+      # writes and `uv.lock` does not; the dev group is excluded so this audits
+      # what a user installs, not what a contributor does.
+      - run: uv export --frozen --no-emit-project --no-dev -o requirements-audit.txt
+      - run: uv run --with pip-audit -- pip-audit --strict -r requirements-audit.txt
+
+  # Two POSIX runners, not three. `windows-latest` is not a free addition:
+  # `store.locked` degrades to a silent no-op without `fcntl` (its own
+  # `# pragma: no cover - Windows`), and five tests assert POSIX semantics that
+  # do not exist on NT: three symlink guards (test_gitops, test_server,
+  # test_store) and two write refusals built on `os.chmod(0o500)`/`0o000`.
+  # Adding the runner today buys a red check on a good commit, which is the one
+  # outcome this file exists to prevent. Refusing Windows loudly or supporting
+  # it properly is open: docs/UPGRADES.md item 4.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --group dev
+
+      # The floor `pyproject.toml` advertises, not whatever uv would fetch: a
+      # 3.12+-only stdlib call would otherwise ship green on whichever
+      # interpreter the runner happens to have.
+      - name: the interpreter is the one the matrix names
+        run: |
+          uv run python -c "import sys; want='${{ matrix.python }}'.split('.')[:2]; got=[str(x) for x in sys.version_info[:2]]; assert want==got, (want, got)"
+
+      # Coverage runs on one cell only — it is the same suite everywhere, and the
+      # floor lives in `[tool.coverage.report]`.
+      - name: pytest (with the coverage floor)
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: uv run pytest -q --cov --cov-report=term
+      - name: pytest
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.11'
+        run: uv run pytest -q
+
+      # The example board is documentation that runs: the README tells people to
+      # copy it, so it has to still be a board. `conflicts` is asserted rather
+      # than run, because examples/demo ships a live PROD-2/PROD-3 overlap on
+      # purpose to teach what the report looks like — it exits 2 on a healthy
+      # repo, and a gate that is red on a good commit gets ignored. The overlap
+      # is the invariant, so exit 2 is the promise CI keeps. `check` is out for
+      # the same reason: it reports the same overlap.
+      - run: uv run python -m agentboard.cli list --dir examples/demo
+      - run: uv run python -m agentboard.cli ready --dir examples/demo --as ada
+      - run: uv run python -m agentboard.cli skill path
+      - name: the demo's deliberate overlap still exits 2
+        run: |
+          set +e
+          uv run python -m agentboard.cli conflicts --dir examples/demo --as ada
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "expected 2 from the demo overlap, got $code"; exit 1; }
+
+  # The gap every other job leaves: a green suite in a checkout says nothing about
+  # the wheel someone actually installs. This builds the artifact, installs it into
+  # a clean tool environment, and runs the README's transcript — so a
+  # `[tool.setuptools.package-data]` glob that stopped matching `skills/*/*`, a
+  # missing `static/`, or a console script pointed at the wrong target fails here
+  # instead of on the user's machine.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - run: uv sync --frozen --group dev
+      - run: uv build --out-dir dist
+      - run: uv tool install --reinstall dist/*.whl
+
+      - name: the README transcript, against the installed wheel
+        env:
+          AGENTBOARD_AGENT: allen
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          board=$(mktemp -d)/repo && mkdir -p "$board" && cd "$board"
+          git init -q -b main
+          agentboard --version
+          agentboard init --title Web --key WEB
+          agentboard create "First card"
+          agentboard claim WEB-1 --paths 'src/**'
+          agentboard show WEB-1 --json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['ok'], d"
+          agentboard create "Second card"
+          # Exit 3, and only 3, is the contract an agent branches on without
+          # reading prose: 3 means "choose other work", 2 means "you typed it
+          # wrong". A claim whose paths collide with one you already hold is the
+          # cheapest way to produce a 3 here.
+          set +e
+          agentboard claim WEB-2 --paths 'src/deep/file.py'
+          code=$?
+          set -e
+          test "$code" -eq 3 || { echo "expected 3, got $code"; exit 1; }
+          agentboard renew WEB-1
+          agentboard done WEB-1
+          agentboard list --json | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d['cards']) >= 2, d"
+          agentboard skill install
+          test -f .agents/skills/agentboard/SKILL.md || { echo "skill not installed"; exit 1; }
+
+      - name: the installed wheel reads the shipped demo
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          demo=$(mktemp -d) && cp -r examples/demo/.agentboard "$demo"/
+          agentboard list --dir "$demo" --json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d['cards']) == 14, len(d['cards'])"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # PR-only: reviewing the dependencies a diff adds needs a base to compare to.
+  dependencies:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: low

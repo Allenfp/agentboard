@@ -1,0 +1,28 @@
+version: 2
+
+updates:
+  # The one runtime dependency and the dev tools both live in the lockfile, and a
+  # lockfile PR is the only kind that cannot rot: `uv sync --frozen` in CI fails
+  # the moment `uv.lock` and `pyproject.toml` disagree, so an unreviewed bump
+  # shows up as a red build rather than a surprise at install time.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      python-minors:
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+
+  # Every action below is pinned to a commit SHA in the workflow files, which is
+  # the point — and a SHA nobody bumps is a dependency nobody updates. This is the
+  # mechanism that keeps the pins from becoming a frozen supply chain, and it
+  # opens a PR naming the version so the pin comment stays true.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

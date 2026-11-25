@@ -1,0 +1,75 @@
+name: release
+
+# A tag is the release. There is no PyPI publish step: `yamlboard` and
+# `agentboard` are both taken on the index by unrelated packages, so the install
+# path is `uv tool install git+…@vX.Y.Z` and the artifact that has to be right is
+# the wheel plus the tag that points at it (docs/UPGRADES.md, decisions).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - run: uv sync --frozen --group dev
+
+      # The floor `pyproject.toml` advertises. A tag is a promise about one
+      # commit, so the suite runs against the commit being released rather than
+      # against whatever CI last saw.
+      - run: uv run pytest -q
+
+      - name: the tag matches the version in the package
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          got=$(uv run python -c "import agentboard; print(agentboard.__version__)")
+          built=$(uv run python -c "import importlib.metadata as m; print(m.version('agentboard'))")
+          test "$tag" = "$got" || { echo "tag v$tag vs __version__ $got"; exit 1; }
+          test "$tag" = "$built" || { echo "tag v$tag vs installed metadata $built"; exit 1; }
+          echo "releasing $got"
+
+      - run: uv build --out-dir dist
+
+      # The wheel is what users get; installing it here turns a wrong
+      # package-data glob into a failed release instead of a bug report.
+      - name: the built wheel installs and runs
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          uv tool install --reinstall dist/*.whl
+          export PATH="$HOME/.local/bin:$PATH"
+          agentboard --version | grep -q "$tag"
+          test -f "$(agentboard skill path)" || { echo "wheel is missing SKILL.md"; exit 1; }
+          demo=$(mktemp -d) && cp -r examples/demo/.agentboard "$demo"/
+          agentboard list --dir "$demo" --json >/dev/null
+
+      # Provenance, not just bytes: SLSA attestations bind these artifacts to
+      # this commit and this workflow, so someone who later wonders whether the
+      # asset on the release is what the tag promised can check instead of trust.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ```bash
+            uv tool install "git+https://github.com/Allenfp/agentboard@${{ github.ref_name }}"
+            ```
+
+            `agentboard --version` should print `${{ github.ref_name }}` without
+            the `v`. Remove it again with `uv tool uninstall agentboard`.
