@@ -10,6 +10,11 @@ on:
 
 permissions:
   contents: write
+  # Attestations land in the repo's attestation store and mint a Sigstore
+  # identity for the build; without both of these, attest-build-provenance
+  # fails the release after the artifacts are already built.
+  attestations: write
+  id-token: write
 
 jobs:
   release:
