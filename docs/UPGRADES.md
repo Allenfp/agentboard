@@ -4,9 +4,11 @@ The gap between "works, tested, documented" and "someone else's project depends
 on this". Written 2026-11-25 against `0.1.0` at the rename to `agentboard`.
 
 Each item says what is true *today*, not what a checklist wants. Where a number
-is quoted it was measured, not guessed: 443 tests passing, 1 skipped (the
-Node-gated client harness), 10.8k lines of `src` against 9.2k lines of tests,
-one dependency (`ruamel.yaml`).
+is quoted it was measured, not guessed: 437 tests passing, 1 skipped (the
+Node-gated client harness), 10.7k lines of `src` against 9.0k lines of tests,
+one dependency (`ruamel.yaml`). The counts are post-rename and
+post-`migrate`-deletion; re-measure them if this document ever disagrees with
+`wc -l`.
 
 Done so far: **1** (name), **2** (release automation), **3** (the CI gate).
 Items 4–10 are open, in the order I would take them.
