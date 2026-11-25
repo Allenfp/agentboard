@@ -1,10 +1,10 @@
 """The coordination invariants, exercised through ``api.apply`` on a real store.
 
-Everything here runs against ``.yamlboard/`` files inside a real ``git init``'d
+Everything here runs against ``.agentboard/`` files inside a real ``git init``'d
 temporary repository, because the guarantees that matter are file guarantees:
 a refused op leaves every byte where it was, a lease renewal moves one line, and
 a card write touches one path so an unrelated card cannot conflict in git. The
-clock is :func:`yamlboard.model.now` patched forward — nothing sleeps, and the
+clock is :func:`agentboard.model.now` patched forward — nothing sleeps, and the
 30-second lease floor is proven by moving time, not waiting for it.
 
 What this file deliberately does *not* test: the HTTP mapping (``test_server``),
@@ -26,8 +26,8 @@ from typing import Any, Callable
 
 from test_gitops import git
 
-from yamlboard import api, cli, model, store
-from yamlboard.model import ValidationError
+from agentboard import api, cli, model, store
+from agentboard.model import ValidationError
 
 T0 = datetime.datetime(2026, 5, 4, 12, 0, 0)
 PEOPLE = ("ada", "grigory", "zoe")
@@ -44,7 +44,7 @@ class Clock:
         self.now = start
         self._real = model.now
 
-    def __enter__(self) -> "Clock":
+    def __enter__(self) -> Clock:
         model.now = lambda: self.now
         return self
 
@@ -355,7 +355,7 @@ class TestPerFileTokens(Ops):
         """An agent working straight from the files has no token to offer.
 
         Requiring one would make the CLI useless: the whole promise is that
-        ``yamlboard claim`` works in a fresh clone with no server and no prior
+        ``agentboard claim`` works in a fresh clone with no server and no prior
         request. The bytes it can read *are* its view of the store.
         """
         card_id = self.new_card("One")
@@ -447,7 +447,7 @@ class TestClaims(Ops):
         self.assertIn("holds it", caught.lines[0])
         self.assertEqual(caught.detail["holder"], "ada")
         self.assertEqual(caught.detail["reason"], "taken")
-        self.assertEqual(caught.lines[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(caught.lines[-1], "next: agentboard ready --as grigory")
         self.assertEqual(self.files(), before, "a denial must not touch the store")
 
     def test_a_denial_lists_every_reason_at_once(self) -> None:
@@ -457,7 +457,8 @@ class TestClaims(Ops):
         the agent back with a fixed path that still hits the block, and it reads
         the repeated failure as a bug in the board.
         """
-        held, blocker, other = self.new_card("Held"), self.new_card("Blocker"), self.new_card("Other")
+        held, blocker, other = (self.new_card("Held"), self.new_card("Blocker"),
+                               self.new_card("Other"))
         self.claim(held, "ada", "src/api/**")
         self.claim(other, "zoe", "docs/**")
         self.op("card.dep.add", id=held, blocked_by=blocker)
@@ -468,7 +469,7 @@ class TestClaims(Ops):
         self.assertIn("ada holds it", body)
         self.assertIn(f"waits on {blocker}", body)
         self.assertIn("zoe claimed docs/**", body)
-        self.assertEqual(caught.lines[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(caught.lines[-1], "next: agentboard ready --as grigory")
 
     def test_re_claiming_your_own_card_with_the_same_paths_writes_nothing(self) -> None:
         """A retry after a lost response must not churn the file.
@@ -528,7 +529,7 @@ class TestClaims(Ops):
 
         result = self.op("claim.renew", id=card_id, agent="ada")
         self.assertEqual(self.numstat(),
-                         [(1, 1, ".yamlboard/cards/WEB-1.yaml")],
+                         [(1, 1, ".agentboard/cards/WEB-1.yaml")],
                          self.card_text(card_id))
         diff = git(self.repo, "diff", "--unified=0")
         changed = [line for line in diff.splitlines()
@@ -546,7 +547,7 @@ class TestClaims(Ops):
         self.claim(card_id, "ada")
         caught = self.expect(api.ClaimDenied, "claim.renew", id=card_id, agent="grigory")
         self.assertEqual(caught.detail["reason"], "not_yours")
-        self.assertEqual(caught.lines[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(caught.lines[-1], "next: agentboard ready --as grigory")
 
         other = self.new_card("Two")
         caught = self.expect(api.ClaimDenied, "claim.renew", id=other, agent="grigory")
@@ -608,7 +609,7 @@ class TestClaims(Ops):
         self.assertNotIn(done_id, [c["id"] for c in api.ready(self.tx())])
 
     def test_an_unknown_agent_is_refused_and_lists_the_board_people(self) -> None:
-        """A stale ``$YAMLBOARD_AGENT`` must read as "fix your name", not "go away".
+        """A stale ``$AGENTBOARD_AGENT`` must read as "fix your name", not "go away".
 
         Auto-creating the identity would be worse: an assignee nobody added
         surfaces weeks later in a git blame, and the allowlist stops meaning
@@ -1482,7 +1483,7 @@ class TestOneCardPerFile(Ops):
         self.assertEqual(self.card(mine)["priority"], "urgent")
         self.assertEqual(self.card_text(theirs), theirs_bytes)
         self.assertEqual([p for _, _, p in self.numstat()],
-                         [".yamlboard/cards/WEB-1.yaml"])
+                         [".agentboard/cards/WEB-1.yaml"])
 
     def test_a_claim_is_coordination_and_never_moves_updated(self) -> None:
         """``updated:`` means "someone edited this card", and a lease is not that.
@@ -1606,7 +1607,7 @@ class TestOneCardPerFile(Ops):
         self.assertNotIn("doing", [c["id"] for c in self.board()["columns"]])
         self.assertIsNone(self.store.read_all().card(card_id).result)
         self.assertNotIn("column: doing", self.card_text(card_id))
-        self.assertIn(".yamlboard/cards/WEB-1.yaml", [p for _, _, p in self.numstat()])
+        self.assertIn(".agentboard/cards/WEB-1.yaml", [p for _, _, p in self.numstat()])
 
     def test_a_create_lands_one_new_file_and_advances_the_boards_counter(self) -> None:
         """``next_card`` lives on the board now; the rescan keeps hand-written ids safe.
@@ -1717,7 +1718,7 @@ class TestDropPositions(Ops):
         self.commit("four cards")
         self.drop(a, before=c)
         self.assertEqual([p for _, _, p in self.numstat()],
-                         [".yamlboard/cards/WEB-1.yaml"])
+                         [".agentboard/cards/WEB-1.yaml"])
 
     def test_a_column_survives_hundreds_of_arbitrary_drops(self) -> None:
         """Float gaps halve on every insert into the same slot, so a long run of
@@ -1821,7 +1822,7 @@ class TestCrossBoardMove(Ops):
         self.op("card.move", id=card_id, board="ops", column="backlog")
 
         self.assertEqual([p for _, _, p in self.numstat()],
-                         [".yamlboard/cards/WEB-1.yaml"],
+                         [".agentboard/cards/WEB-1.yaml"],
                          "a rename dirtied something besides the card it moved")
         self.assertFalse((self.store.cards_dir / "WEB-1.yaml").exists())
         self.assertTrue((self.store.cards_dir / "OPS-1.yaml").is_file(),
@@ -1893,11 +1894,11 @@ class TestAntiDrift(unittest.TestCase):
         pass here and fail on the machine that matters, which is the bug
         ``skill install`` exists not to have.
         """
-        path = Path(str(resources.files("yamlboard").joinpath(
-            "skills", "yamlboard", "SKILL.md")))
+        path = Path(str(resources.files("agentboard").joinpath(
+            "skills", "agentboard", "SKILL.md")))
         package = Path(api.__file__).resolve().parent
         self.assertTrue(path.is_file(), f"the wheel is missing {path}")
-        self.assertEqual(path.resolve().parent, (package / "skills" / "yamlboard").resolve())
+        self.assertEqual(path.resolve().parent, (package / "skills" / "agentboard").resolve())
         return path.read_text(encoding="utf-8")
 
     def test_the_op_registry_is_exactly_the_documented_set(self) -> None:
@@ -1991,7 +1992,7 @@ class TestAntiDrift(unittest.TestCase):
     def test_the_skill_declares_exactly_the_verbs_that_exist(self) -> None:
         """``metadata.commands`` is how an agent picks this skill and what it trusts.
 
-        A stale list is worse than none: an agent that reads ``yamlboard
+        A stale list is worse than none: an agent that reads ``agentboard
         take WEB-3`` will run it, get exit 2, and conclude the board is broken
         rather than the documentation.
         """
@@ -2005,7 +2006,7 @@ class TestAntiDrift(unittest.TestCase):
         self.assertNotEqual(commands + ("take",), cli.VERBS)
         self.assertNotEqual(tuple(sorted(commands)), cli.VERBS)
         name = re.search(r"^name:\s*(\S+)", front, re.MULTILINE)
-        self.assertEqual(name and name.group(1), "yamlboard")
+        self.assertEqual(name and name.group(1), "agentboard")
 
     def test_the_exit_table_is_the_same_list_in_all_four_places(self) -> None:
         """Exit 3 is the one value an agent branches on without reading prose.
@@ -2117,8 +2118,8 @@ class TestAntiDrift(unittest.TestCase):
         """
         resolved = cli.skill_path()
         self.assertIsNotNone(resolved)
-        bundled = Path(str(resources.files("yamlboard").joinpath(
-            "skills", "yamlboard", "SKILL.md")))
+        bundled = Path(str(resources.files("agentboard").joinpath(
+            "skills", "agentboard", "SKILL.md")))
         self.assertEqual(resolved.resolve(), bundled.resolve())
         self.assertTrue(bundled.read_bytes())
         elsewhere = Path(tempfile.mkdtemp()).resolve()

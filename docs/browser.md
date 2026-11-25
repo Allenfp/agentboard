@@ -1,12 +1,12 @@
 # The board in a browser
 
 ```bash
-yamlboard serve
+agentboard serve
 ```
 
 ```
-yamlboard 0.1.0 on http://localhost:7474
-  board /home/you/my-repo/.yamlboard
+agentboard 0.1.0 on http://localhost:7474
+  board /home/you/my-repo/.agentboard
   ctrl-c to stop
 ```
 
@@ -39,7 +39,7 @@ Coordination arrives as state on cards, not as a new screen:
 - **You claim as whoever the toolbar's agent select says** (`c` uses it too). It is
   a select over `people`, never free text, and it lives in `localStorage` — a pref,
   so two people can read one board as different agents.
-- **Commit** stages `.yamlboard/` and nothing else, and refuses outright if your
+- **Commit** stages `.agentboard/` and nothing else, and refuses outright if your
   index already holds someone else's files — a human clicking Commit must not ship
   an agent's half-finished source edit.
 
@@ -58,6 +58,6 @@ fails if they drift. A shortcut nobody can discover is not one.
 
 The v1 board's PNGs were deleted rather than left as a picture of something that
 no longer exists, and nothing in this repo generates them, so the demo store is
-the tour: `cp -r examples/demo/.yamlboard ./ && yamlboard serve` shows the claims,
+the tour: `cp -r examples/demo/.agentboard ./ && agentboard serve` shows the claims,
 the ticking leases and the conflict control in a browser in about ten seconds.
 CONVENTIONS states what happens if anyone adds images again.

@@ -1,4 +1,4 @@
-"""Read/write a ``.yamlboard/`` store: round-trip YAML, atomic replace, lock.
+"""Read/write a ``.agentboard/`` store: round-trip YAML, atomic replace, lock.
 
 A store is a directory inside the repository it coordinates: ``board.yaml`` for
 the rare board-level edits, ``cards/<ID>.yaml`` for one card per file, and
@@ -66,7 +66,7 @@ IGNORE_NAME = ".gitignore"
 # Patterns are relative to this file, so no `**/` here — the store's own ignore
 # covers exactly the two per-machine artefacts written beside it.
 IGNORE_BODY = (
-    "# yamlboard runtime scratch — written by yamlboard, never board state.\n"
+    "# agentboard runtime scratch — written by agentboard, never board state.\n"
     "# The directory itself is tracked: it IS the board.\n"
     f"{LOCK_NAME}\n"
     f"{TEMP_PREFIX}*{TEMP_SUFFIX}\n"
@@ -242,14 +242,14 @@ def _fsync_dir(directory: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 class Store:
-    """A ``.yamlboard/`` directory, and the only way in to one.
+    """A ``.agentboard/`` directory, and the only way in to one.
 
     Every CLI verb and every HTTP request goes through this class, which is what
     makes "the files are the arbiter" true: the CLI needs no server because the
     server owns no state beyond these files.
     """
 
-    DIRNAME = ".yamlboard"
+    DIRNAME = ".agentboard"
 
     def __init__(self, root: Path | str):
         self.root = Path(root)
@@ -257,7 +257,7 @@ class Store:
             self.root = self.root / self.DIRNAME
 
     @classmethod
-    def discover(cls, start: Path | str | None = None) -> "Store":
+    def discover(cls, start: Path | str | None = None) -> Store:
         """Walk up from ``start`` (default cwd) to the nearest store.
 
         Agents run inside the repository they are coordinating, so "find the
@@ -270,8 +270,8 @@ class Store:
             if (store.root / BOARD_FILE).is_file():
                 return store
         raise StoreError(
-            f"no .yamlboard/ store found in {here} or any parent directory - "
-            "run 'yamlboard init' first"
+            f"no .agentboard/ store found in {here} or any parent directory - "
+            "run 'agentboard init' first"
         )
 
     @property
@@ -334,7 +334,7 @@ class Store:
         loses that work without a trace; these names are what ``check`` prints
         so the owner learns the file is invisible.
 
-        ``.tmp-*`` scratch is deliberately absent. It is yamlboard's own debris
+        ``.tmp-*`` scratch is deliberately absent. It is agentboard's own debris
         from a killed save, it is git-ignored, and it means nothing to the
         board — telling someone to rename it to ``WEB-9.yaml`` would be advice
         to corrupt their own store. Files without a ``.yaml`` extension are
@@ -356,7 +356,7 @@ class Store:
     def read_board(self) -> File:
         """``board.yaml``, validated. A missing store is an error, not an empty board."""
         if not self.board_path.is_file():
-            raise StoreError(f"{self.board_path} does not exist - run 'yamlboard init'")
+            raise StoreError(f"{self.board_path} does not exist - run 'agentboard init'")
         return _read_file(self.board_path, model.validate)
 
     def read_card(self, card_id: str) -> File:
@@ -509,7 +509,7 @@ class Store:
                     raise ValidationError([
                         f"card {card_id!r}: {target.name} already holds card "
                         f"{ahead!r} in {where} — two merged files want one name. "
-                        "Renaming one is a human call; `yamlboard conflicts` "
+                        "Renaming one is a human call; `agentboard conflicts` "
                         "names the pair."])
             # The sibling path holds the same id in the other directory, which is
             # normally this card changing between live and archived -- ours to
@@ -541,7 +541,7 @@ class Store:
     # -- creation ------------------------------------------------------------ #
 
     def create(self, title: str = "Board", *, key: str | None = None,
-               people: Sequence[str] = ()) -> "Snapshot":
+               people: Sequence[str] = ()) -> Snapshot:
         """Write a valid starter store. Refuses if one is already there.
 
         Refusing rather than merging is the whole safety story for ``init``: an
@@ -561,7 +561,7 @@ class Store:
         return self.read_all()
 
     def write_ignore(self) -> bool:
-        """Seed ``.yamlboard/.gitignore`` so the lock never reaches git.
+        """Seed ``.agentboard/.gitignore`` so the lock never reaches git.
 
         The store writes two per-machine artefacts inside itself: the advisory
         flock and the scratch of a save killed mid-write. Neither is board state,
@@ -572,7 +572,7 @@ class Store:
         root ``.gitignore``: the board gets committed into somebody else's repo,
         and editing that repo's root file unasked is not ours to do. A nested
         ``.gitignore`` travels with the directory, so ``git add .`` is safe in
-        every consuming repo including ones that have never heard of yamlboard —
+        every consuming repo including ones that have never heard of agentboard —
         and without it the Commit button refuses, because its own ``git add``
         stages the lock and then the foreign-file guard rightly sees a file it
         did not put there.
@@ -683,7 +683,7 @@ def new_board(title: str = "Board", *, key: str | None = None,
     ``people`` is the starting roster, and the caller decides whether it has one.
     An empty roster is not a broken board — it is a board whose humans have not
     been named yet — but a board nobody can claim from is, so ``init`` passes the
-    identity it was invoked with. See :func:`yamlboard.cli.verb_init`.
+    identity it was invoked with. See :func:`agentboard.cli.verb_init`.
     """
     key = (key or model.board_key(title)).upper()
     return {
@@ -728,7 +728,7 @@ def _held() -> set[str]:
 
 
 class locked:
-    """Exclusive advisory lock on ``.yamlboard/.lock``.
+    """Exclusive advisory lock on ``.agentboard/.lock``.
 
     The artefact is named for *where* it lives, not for a card, so one ignore
     line covers it whatever the board is called. It locks the directory rather
@@ -751,24 +751,27 @@ class locked:
     def path(self) -> Path:
         return self.root / LOCK_NAME
 
-    def __enter__(self) -> "locked":
+    def __enter__(self) -> locked:
         self.root.mkdir(parents=True, exist_ok=True)
         key = str(self.root.resolve())
         held = _held()
-        if fcntl is None or key in held:
+        # ``fcntl`` is None off POSIX; the local alias is what lets a type
+        # checker see the calls below are reachable only when it is not.
+        flock = fcntl
+        if flock is None or key in held:
             self._nested = True
             return self
         fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
         deadline = time.monotonic() + self.timeout
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                flock.flock(fd, flock.LOCK_EX | flock.LOCK_NB)
                 break
             except OSError:
                 if time.monotonic() >= deadline:
                     os.close(fd)
                     raise StoreError(
-                        f"{self.root} is locked by another yamlboard process"
+                        f"{self.root} is locked by another agentboard process"
                     ) from None
                 time.sleep(0.02)
         self._fd = fd
@@ -776,10 +779,11 @@ class locked:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        if self._fd is None:
+        flock = fcntl
+        if self._fd is None or flock is None:
             return
         try:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            flock.flock(self._fd, flock.LOCK_UN)
         except OSError:
             pass
         finally:

@@ -3,7 +3,7 @@
 Version 2 deleted ``read``/``update``/``write`` and the one global ``rev`` they
 shared. What replaced them is a directory — ``board.yaml`` for the rare board
 edit, ``cards/<ID>.yaml`` for one card per file, ``archive/`` for retired ones —
-plus a per-file conflict token and an advisory flock on ``.yamlboard/.lock``.
+plus a per-file conflict token and an advisory flock on ``.agentboard/.lock``.
 Every guarantee here is one an agent or a human loses loudly if it breaks:
 
 * a card write must touch **one path**, or two clones collide in git again;
@@ -36,11 +36,10 @@ from io import StringIO
 from pathlib import Path
 
 from ruamel.yaml import YAML
-
-from yamlboard import api, model, store
-from yamlboard.model import ValidationError
-
 from test_gitops import GIT_ENV, git
+
+from agentboard import api, model, store
+from agentboard.model import ValidationError
 
 try:  # POSIX only; store degrades to a no-op lock without it
     import fcntl
@@ -133,7 +132,7 @@ updated: 2026-11-22T16:00:00
 
 
 class Base(unittest.TestCase):
-    """A resolved temp dir holding one real ``.yamlboard/`` store.
+    """A resolved temp dir holding one real ``.agentboard/`` store.
 
     The store is written from text, never from ``Store.create``, so the fixtures
     show the layout a human actually types (comments, trailing notes, quotes)
@@ -170,7 +169,7 @@ class Base(unittest.TestCase):
 
         The ``.gitignore`` comes from the checkout rather than being written
         here: the claim under test is that *the file we ship* narrows to the two
-        scratch artefacts, so widening it back to ``.yamlboard*`` must fail.
+        scratch artefacts, so widening it back to ``.agentboard*`` must fail.
         """
         repo = self.dir / "repo"
         repo.mkdir()
@@ -181,7 +180,7 @@ class Base(unittest.TestCase):
         try:
             ignore = (REPO / ".gitignore").read_text(encoding="utf-8")
         except OSError:  # pragma: no cover - an installed wheel ships no .gitignore
-            ignore = "**/.yamlboard/.lock\n**/.yamlboard/.tmp-*.yaml\n"
+            ignore = "**/.agentboard/.lock\n**/.agentboard/.tmp-*.yaml\n"
         (repo / ".gitignore").write_text(ignore, encoding="utf-8")
         self.install(repo)
         git(repo, "add", "-A")
@@ -241,7 +240,7 @@ class TestLayout(Base):
         """Agents run *inside* the repo they coordinate, often in ``src/``.
 
         A ``discover`` that only checked the cwd would tell a working agent to
-        run ``yamlboard init``, and a second board in one repo is worse than
+        run ``agentboard init``, and a second board in one repo is worse than
         none: two agents then claim against different files and both believe
         they hold ``src/api/**``.
         """
@@ -254,7 +253,7 @@ class TestLayout(Base):
         """A clone with no board is a real state, and the message is the fix.
 
         "no store" alone sends an agent off to read the source; the searched
-        path plus ``yamlboard init`` is the difference between one confused
+        path plus ``agentboard init`` is the difference between one confused
         second and a human being paged. Discovery must also not *make* a store —
         an empty board in a clone looks like a board somebody emptied.
         """
@@ -264,14 +263,14 @@ class TestLayout(Base):
             store.Store.discover(bare)
         message = str(caught.exception)
         self.assertIn(str(bare), message)
-        self.assertIn("yamlboard init", message)
+        self.assertIn("agentboard init", message)
         self.assertFalse((bare / store.Store.DIRNAME).exists())
 
     def test_a_root_may_be_named_with_or_without_the_directory(self) -> None:
-        """``init`` passes the repo, ``discover`` hands back ``.yamlboard`` itself.
+        """``init`` passes the repo, ``discover`` hands back ``.agentboard`` itself.
 
         If the two spellings disagreed, one of them would write a nested
-        ``.yamlboard/.yamlboard`` and the board would silently split in two —
+        ``.agentboard/.agentboard`` and the board would silently split in two —
         each half convinced the other's claims do not exist.
         """
         self.assertEqual(store.Store(self.dir).root, self.root)
@@ -294,7 +293,7 @@ class TestLayout(Base):
         self.assertFalse(half.exists())
         with self.assertRaises(store.StoreError) as caught:
             half.read_board()
-        self.assertIn("yamlboard init", str(caught.exception))
+        self.assertIn("agentboard init", str(caught.exception))
 
     def test_locate_follows_a_card_between_the_directories(self) -> None:
         """Everyone asks "where is PROD-2" before opening it.
@@ -443,7 +442,7 @@ class TestLayout(Base):
         random suffix — and its filename no longer matches its ``id``, so the
         next real save of that id cannot find the file to replace. It is not a
         stray either: that advice is "rename it to WEB-9.yaml", and following it
-        on yamlboard's own git-ignored debris would corrupt the store.
+        on agentboard's own git-ignored debris would corrupt the store.
         """
         stray = f"{store.TEMP_PREFIX}crash{store.TEMP_SUFFIX}"
         (self.store.cards_dir / stray).write_text(
@@ -591,7 +590,7 @@ class TestQuietWrites(Base):
         repo = self.scratch_repo()
         self.bump("PROD-1", expires=datetime.datetime(2099, 6, 1, 12, 0, 0))
         numstat = git(repo, "diff", "--numstat")
-        self.assertEqual(numstat, "1\t1\t.yamlboard/cards/PROD-1.yaml",
+        self.assertEqual(numstat, "1\t1\t.agentboard/cards/PROD-1.yaml",
                          f"a renewal rewrote more than one line:\n{numstat}")
         changed = [line for line in git(repo, "diff", "-U0").splitlines()
                    if line[:1] in "+-" and not line.startswith(("+++", "---"))]
@@ -617,7 +616,7 @@ class TestQuietWrites(Base):
     def test_the_lock_and_the_scratch_are_the_two_ignored_names(self) -> None:
         """``.gitignore`` must narrow to exactly ``.lock`` and ``.tmp-*.yaml``.
 
-        Widen it back to ``.yamlboard*`` and the board stops being tracked: the
+        Widen it back to ``.agentboard*`` and the board stops being tracked: the
         repo looks clean while the coordination state lives on one laptop, and
         every clone that arrives believes every card is free. Narrow it too far
         and the lock becomes an untracked change an agent sweeps into a commit
@@ -631,15 +630,15 @@ class TestQuietWrites(Base):
         self.addCleanup(scratch.unlink, True)
         self.assertEqual(self.porcelain(), [], "tracked board state or scratch showed up")
         self.assertEqual(set(self.porcelain("--ignored=matching")),
-                         {f"!! .yamlboard/{store.LOCK_NAME}",
-                          f"!! .yamlboard/{store.TEMP_PREFIX}x{store.TEMP_SUFFIX}"})
+                         {f"!! .agentboard/{store.LOCK_NAME}",
+                          f"!! .agentboard/{store.TEMP_PREFIX}x{store.TEMP_SUFFIX}"})
         self.assertEqual(sorted(p.name for p in (repo / store.Store.DIRNAME).iterdir()
                                 if "lock" in p.name.lower()),
                          [store.LOCK_NAME], f"expected {store.LOCK_NAME!r} only")
-        for path, ignore in ((f".yamlboard/{store.LOCK_NAME}", True),
-                             (f".yamlboard/{store.TEMP_PREFIX}x{store.TEMP_SUFFIX}", True),
-                             (f".yamlboard/{store.BOARD_FILE}", False),
-                             (".yamlboard/cards/PROD-1.yaml", False)):
+        for path, ignore in ((f".agentboard/{store.LOCK_NAME}", True),
+                             (f".agentboard/{store.TEMP_PREFIX}x{store.TEMP_SUFFIX}", True),
+                             (f".agentboard/{store.BOARD_FILE}", False),
+                             (".agentboard/cards/PROD-1.yaml", False)):
             done = subprocess.run(["git", "check-ignore", "-q", path], cwd=str(repo),
                                   capture_output=True, text=True,
                                   env={**os.environ, **GIT_ENV})
@@ -655,11 +654,11 @@ class TestQuietWrites(Base):
         self.bump("PROD-1", expires=datetime.datetime(2099, 6, 1, 12, 0, 0))
         # ``git()`` strips each line, so compare paths, not the XY columns
         changed = [line.split()[-1] for line in self.porcelain()]
-        self.assertEqual(changed, [".yamlboard/cards/PROD-1.yaml"],
+        self.assertEqual(changed, [".agentboard/cards/PROD-1.yaml"],
                          f"a real edit did not show as exactly one dirty card: {changed}")
 
 class TestLocking(Base):
-    """``.yamlboard/.lock`` serialises the writes tokens cannot order."""
+    """``.agentboard/.lock`` serialises the writes tokens cannot order."""
 
     @needs_flock
     def test_the_lock_is_reentrant_on_the_one_thread(self) -> None:
@@ -713,7 +712,7 @@ class TestLocking(Base):
     def test_a_held_lock_times_out_rather_than_hanging(self) -> None:
         """A wedged process must cost a command, not a terminal.
 
-        Without a deadline ``yamlboard claim`` inside an agent's shell blocks
+        Without a deadline ``agentboard claim`` inside an agent's shell blocks
         until a human kills it, and the agent cannot tell it is not merely
         waiting on the board. The refusal has to name the store, since one repo
         can hold more than one, and it has to be ``StoreError`` so the CLI maps
@@ -1057,11 +1056,11 @@ class TestCreation(Base):
         """A board lands in somebody else's repo, so it has to keep itself clean.
 
         ``.lock`` and ``.tmp-*.yaml`` are written beside ``board.yaml`` and are
-        not board state. A repo that never heard of yamlboard has no rule for
+        not board state. A repo that never heard of agentboard has no rule for
         them, so ``git add .`` sweeps a 0-byte lock into the commit, and the
         board's own Commit button then refuses: its ``git add`` stages the lock,
         and the foreign-file guard correctly sees a file it did not put there.
-        The store ships the rule inside ``.yamlboard/`` rather than editing the
+        The store ships the rule inside ``.agentboard/`` rather than editing the
         host repo's root ``.gitignore`` unasked, so the fix travels with the
         board and cannot be lost by a clone.
         """
@@ -1314,13 +1313,13 @@ class TestYamlFidelity(Base):
         self.assertIn("title: Fix the 'deploy' timeout",
                       self.store.card_path("PROD-1").read_text(encoding="utf-8"))
 
-    def test_a_version_one_file_is_refused_and_named_its_way_out(self) -> None:
-        """There is deliberately no v1 reader.
+    def test_an_older_version_is_refused_and_names_its_way_out(self) -> None:
+        """There is deliberately no reader for a version this build did not write.
 
-        A silently-misread board is worse than a loud refusal: ``version: 1``
-        files keep ``rev:`` and the cards inside the board, so a permissive
-        reader would show an empty board and let an agent take work another
-        agent already claimed.
+        A silently-misread board is worse than a loud refusal: an older file
+        keeps ``rev:`` and the cards inside the board, so a permissive reader
+        would show an empty board and let an agent take work another agent
+        already claimed.
         """
         self.board_path.write_text("version: 1\ntitle: Old\nrev: 4\nboards: []\n",
                                    encoding="utf-8")
@@ -1328,7 +1327,7 @@ class TestYamlFidelity(Base):
             self.store.read_board()
         message = " ".join(caught.exception.errors)
         self.assertIn("file says 1", message)
-        self.assertIn("run 'yamlboard migrate'", message)
+        self.assertIn("nothing was read", message)
 
     def test_a_broken_board_is_a_store_error_not_a_traceback(self) -> None:
         """The server polls the store on a timer.

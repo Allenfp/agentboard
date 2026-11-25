@@ -24,8 +24,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from yamlboard import model
-from yamlboard.model import ValidationError
+from agentboard import model
+from agentboard.model import ValidationError
 
 #: Every stamp in this file is spelled against T0 and injected, never read off the
 #: wall clock, so no test's verdict depends on when the suite ran.
@@ -810,18 +810,20 @@ class TestValidateBoard(Base):
     def test_the_fixture_is_valid(self) -> None:
         self.assertEqual(model.validate(self.doc), [])
 
-    def test_a_version_one_file_is_refused_and_names_the_way_out(self) -> None:
-        """A v1 file still on disk must not load as if it were v2.
+    def test_an_older_version_is_refused_and_names_the_way_out(self) -> None:
+        """A file this build did not write must not load as if it did.
 
-        Its cards are inside ``boards[].cards``; loading it would show an empty
-        board and the first save would delete them. The message has to name
-        ``yamlboard migrate`` or the reader has no idea the bridge exists.
+        There is no migration bridge and no second reader: a permissive reader
+        shows an empty board, and the first save deletes whatever was really
+        there. So the refusal is the whole answer, and it has to carry an action
+        - start a new board, or restore a backup - or the reader is stuck.
         """
         self.doc["version"] = 1
         errors = model.validate(self.doc)
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("file says 1", errors[0])
-        self.assertIn("yamlboard migrate", errors[0])
+        self.assertIn("nothing was read", errors[0])
+        self.assertIn("start a new board", errors[0])
 
     def test_a_newer_version_is_refused_before_it_stamps_the_file_old(self) -> None:
         """Refusing upward is what stops this build downgrading someone's board."""
@@ -829,21 +831,23 @@ class TestValidateBoard(Base):
         errors = model.validate(self.doc)
         self.assertTrue(any("understands up to" in e for e in errors), errors)
 
-    def test_a_version_below_one_is_a_value_error_not_a_migration(self) -> None:
+    def test_a_version_below_one_is_a_value_error_not_a_version_mismatch(self) -> None:
         self.doc["version"] = 0
         self.assertTrue(any(e.startswith("version:") for e in model.validate(self.doc)))
 
-    def test_a_board_with_a_cards_key_says_where_cards_live_now(self) -> None:
-        """``cards:`` is the v1 shape, so it gets more than "unknown key".
+    def test_a_board_with_a_cards_key_says_where_cards_live(self) -> None:
+        """``cards:`` is the shape a hand-edit reaches for, so it gets more than
+        "unknown key".
 
-        A person who just upgraded and sees ``unknown key 'cards' (allowed: ...)``
-        has no way to infer that the whole storage model moved.
+        A person who writes ``cards:`` under a board and sees only
+        ``unknown key 'cards' (allowed: ...)`` has no way to infer that cards
+        are files, so they retry the same edit in a different indentation.
         """
         self.board()["cards"] = []
         errors = model.validate(self.doc)
         self.assertTrue(any("unknown key 'cards'" in e for e in errors), errors)
         self.assertTrue(any("cards live in cards/<ID>.yaml" in e and
-                            "yamlboard migrate" in e for e in errors), errors)
+                            "a board never holds them" in e for e in errors), errors)
 
     def test_the_deleted_global_counter_is_an_unknown_key(self) -> None:
         """``rev:`` must not survive as a tolerated key.

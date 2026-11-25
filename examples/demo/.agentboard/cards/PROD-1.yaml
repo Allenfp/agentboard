@@ -10,7 +10,7 @@ priority: high
 assignee: ada
 estimate: 5
 links:
-  - url: https://github.com/Allenfp/yamlboard
+  - url: https://github.com/Allenfp/agentboard
     title: the repo
 subtasks:
   - text: split the store into board.yaml + cards/

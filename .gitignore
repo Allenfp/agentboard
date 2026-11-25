@@ -14,8 +14,8 @@ dist/
 .coverage
 htmlcov/
 
-# yamlboard runtime scratch
-# `.yamlboard/` itself is tracked - it IS the board, and a clone that arrived
+# agentboard runtime scratch
+# `.agentboard/` itself is tracked - it IS the board, and a clone that arrived
 # without it cannot tell who holds which file. Only the two per-machine
 # artefacts are ignored: the advisory flock and the scratch of an interrupted
 # save.
@@ -24,13 +24,16 @@ htmlcov/
 # root file. These lines are the second brace: they cover stores created before
 # that rule existed, and they are what
 # TestQuietWrites::test_the_lock_and_the_scratch_are_the_two_ignored_names
-# pins, so widening either list back to `.yamlboard*` fails a test rather than
+# pins, so widening either list back to `.agentboard*` fails a test rather than
 # silently untracking the board.
-**/.yamlboard/.lock
-**/.yamlboard/.tmp-*.yaml
-**/.yamlboard/**/*.tmp-*.yaml
+**/.agentboard/.lock
+**/.agentboard/.tmp-*.yaml
+**/.agentboard/**/*.tmp-*.yaml
 
 # editors / os
 .DS_Store
 .idea/
 .vscode/
+
+# exported for pip-audit in CI (`uv export`, never committed)
+requirements-audit.txt

@@ -1,0 +1,4 @@
+# agentboard runtime scratch — written by agentboard, never board state.
+# The directory itself is tracked: it IS the board.
+.lock
+.tmp-*.yaml

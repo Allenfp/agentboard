@@ -1,13 +1,13 @@
-"""``yamlboard`` as an agent meets it: which exit code, which stream, which identity.
+"""``agentboard`` as an agent meets it: which exit code, which stream, which identity.
 
 Agents branch on numbers, not prose. The contract pinned here is the one in
 ``--help``'s epilog — 0 ok, 2 bad argument / refused operation / invalid file /
 unknown agent name, 3 *only* "another agent holds it" — plus the stream rules
 that make those codes usable: ``--json`` stdout is exactly one parseable JSON
 document with nothing mixed in, and the ``as <agent>`` banner lands on stderr
-*before* a write, so a stale ``$YAMLBOARD_AGENT`` cannot quietly mislabel a card.
+*before* a write, so a stale ``$AGENTBOARD_AGENT`` cannot quietly mislabel a card.
 
-Everything runs :func:`yamlboard.cli.main` in-process against a real git repo in
+Everything runs :func:`agentboard.cli.main` in-process against a real git repo in
 a temp directory (``GIT_ENV`` from ``test_gitops`` kills ambient gpgsign,
 fsmonitor and the developer's own global config), and ``serve`` really binds a
 loopback socket. Only three things are stood in for, each because it cannot be
@@ -33,7 +33,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
-from yamlboard import api, cli, model, store
+from agentboard import api, cli, model, store
 
 # The fixture's own git calls: a developer machine with commit.gpgSign=true, a
 # global core.fsmonitor or a personal user.email must not decide which identity
@@ -64,7 +64,7 @@ def dirty(cwd: Path) -> list[str]:
     Reads git raw rather than through :func:`git`: porcelain prefixes each line
     with a two-character status and one space, and ``git()``'s ``strip()`` eats
     that space, shifting every path a character — enough to turn
-    ``.yamlboard/cards/WEB-1.yaml`` into ``yamlboard/cards/...`` and make a
+    ``.agentboard/cards/WEB-1.yaml`` into ``agentboard/cards/...`` and make a
     correctly quiet tree look like the wrong file was touched.
     """
     done = subprocess.run(["git", "status", "--porcelain=v1", "--untracked-files=all"],
@@ -91,7 +91,7 @@ class Board(unittest.TestCase):
     """A committed git repo holding one fresh v2 store, two people, no cards.
 
     Isolation is load-bearing: identity falls through to ``git config
-    user.email``, so an inherited ``$YAMLBOARD_AGENT`` or the developer's own
+    user.email``, so an inherited ``$AGENTBOARD_AGENT`` or the developer's own
     global config would decide who a claim is signed as. Each test gets an
     environment containing nothing but the git neutering flags, and a repo whose
     only config is what the test itself writes.
@@ -117,7 +117,7 @@ class Board(unittest.TestCase):
         # this the lock file shows up as an untracked surprise in the "a claim
         # touched exactly one file" test.
         (self.repo / ".gitignore").write_text(
-            ".yamlboard/.lock\n.yamlboard/.tmp-*\n", encoding="utf-8")
+            ".agentboard/.lock\n.agentboard/.tmp-*\n", encoding="utf-8")
         git(self.repo, "add", "-A")
         # Identity for this one commit, passed inline rather than with
         # `git config`: several tests below assert the board resolves *no*
@@ -154,7 +154,7 @@ class Board(unittest.TestCase):
 
         Pinning the cwd is not tidiness: an earlier version of this fixture let
         ``init`` default to "here", and a failing test wrote a live
-        ``.yamlboard/`` into the yamlboard checkout itself.
+        ``.agentboard/`` into the agentboard checkout itself.
         """
         previous = Path.cwd()
         os.chdir(path)
@@ -376,7 +376,7 @@ class TestDenials(Board):
 
         code, out, err = self.yb("claim", card_id, "--as", "grigory")
         self.assertEqual(code, cli.EXIT_DENIED)
-        self.assertEqual(said(err)[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(said(err)[-1], "next: agentboard ready --as grigory")
 
     def test_overlapping_paths_on_a_different_card_are_refused_as_3(self) -> None:
         """Two cards, one set of files: glob intersection blocks the second.
@@ -394,7 +394,7 @@ class TestDenials(Board):
         self.assertEqual(code, cli.EXIT_DENIED)
         self.assertIn("your paths collide", err)
         self.assertIn("ada claimed src/api/**", err)
-        self.assertEqual(said(err)[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(said(err)[-1], "next: agentboard ready --as grigory")
 
         # ... and work nobody has spoken for is still claimable.
         self.assertEqual(self.claim(other, "grigory", "docs/**"), cli.EXIT_OK)
@@ -412,7 +412,7 @@ class TestDenials(Board):
         self.assertEqual(code, cli.EXIT_DENIED)
         self.assertIn("taken", out)
         self.assertIn("ada", out)
-        self.assertEqual(said(err)[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(said(err)[-1], "next: agentboard ready --as grigory")
         self.assertNotIn("is taken", out, "the denial must live on one stream")
 
     def test_renewing_someone_elses_lease_is_denied_not_silently_allowed(self) -> None:
@@ -427,7 +427,7 @@ class TestDenials(Board):
         code, out, err = self.yb("renew", card_id, "--as", "grigory")
         self.assertEqual(code, cli.EXIT_DENIED)
         self.assertIn("held by ada", err)
-        self.assertEqual(said(err)[-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(said(err)[-1], "next: agentboard ready --as grigory")
 
 
 # --------------------------------------------------------------------------- #
@@ -445,8 +445,8 @@ class TestUsage(Board):
         elsewhere.mkdir()
         code, out, err = self.yb("check", "--dir", str(elsewhere))
         self.assertEqual(code, cli.EXIT_USAGE)
-        self.assertIn(".yamlboard", err)
-        self.assertIn("yamlboard init", err)
+        self.assertIn(".agentboard", err)
+        self.assertIn("agentboard init", err)
 
     def test_an_unknown_verb_exits_2_and_lists_the_real_verbs(self) -> None:
         """A hallucinated verb must be a usage error carrying the alternatives.
@@ -536,7 +536,7 @@ class TestUsage(Board):
         code, out, err = self.yb("show", "WEB-404")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("WEB-404", err)
-        self.assertIn("yamlboard list", err)
+        self.assertIn("agentboard list", err)
 
 
 # --------------------------------------------------------------------------- #
@@ -554,18 +554,18 @@ class TestIdentity(Board):
         """
         git(self.repo, "config", "user.email", "ada@work.example")
 
-        # --as against $YAMLBOARD_AGENT, with the env var naming the *other*
+        # --as against $AGENTBOARD_AGENT, with the env var naming the *other*
         # person: if both sources agreed the test would pass either way.
         first = self.create()
-        os.environ["YAMLBOARD_AGENT"] = "grigory"
+        os.environ["AGENTBOARD_AGENT"] = "grigory"
         code, out, err = self.yb("claim", first, "--as", "ada")
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertEqual(self.card(first)["assignee"], "ada",
-                         "--as lost to $YAMLBOARD_AGENT")
+                         "--as lost to $AGENTBOARD_AGENT")
         self.assertIn("as ada", err)
 
         # git config as the last resort, once the env var is gone.
-        del os.environ["YAMLBOARD_AGENT"]
+        del os.environ["AGENTBOARD_AGENT"]
         second = self.create()
         code, out, err = self.yb("claim", second)
         self.assertEqual(code, cli.EXIT_OK, err)
@@ -573,11 +573,11 @@ class TestIdentity(Board):
                          "the local part of git user.email is not the fallback")
 
     def test_the_environment_variable_beats_the_git_config(self) -> None:
-        """``export YAMLBOARD_AGENT`` is how the skill sets identity per shell; a
+        """``export AGENTBOARD_AGENT`` is how the skill sets identity per shell; a
         machine-level git email must not silently override a deliberate choice."""
         card_id = self.create()
         git(self.repo, "config", "user.email", "ada@work.example")
-        os.environ["YAMLBOARD_AGENT"] = "grigory"
+        os.environ["AGENTBOARD_AGENT"] = "grigory"
 
         code, out, err = self.yb("claim", card_id)
         self.assertEqual(code, cli.EXIT_OK, err)
@@ -626,7 +626,7 @@ class TestIdentity(Board):
         before = self.people()
         code, out, err = self.yb("claim", card_id)
         self.assertEqual(code, cli.EXIT_USAGE)
-        self.assertIn("YAMLBOARD_AGENT", err)
+        self.assertIn("AGENTBOARD_AGENT", err)
         self.assertIn("--as ada", err)
         self.assertEqual(self.people(), before)
         self.assertNotIn("claim", self.card(card_id))
@@ -639,7 +639,7 @@ class TestIdentity(Board):
         laying out a board has not decided who will work it — and the plan's own
         verification steps run exactly these commands with no identity set.
         """
-        self.assertNotIn("YAMLBOARD_AGENT", os.environ)
+        self.assertNotIn("AGENTBOARD_AGENT", os.environ)
         code, out, err = self.yb("create", "Backlog item")
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertEqual(out.split()[1], "WEB-1")
@@ -654,7 +654,7 @@ class TestIdentity(Board):
                          "filling the board must not invent a person")
 
     def test_the_banner_names_the_identity_before_anything_is_written(self) -> None:
-        """A stale ``$YAMLBOARD_AGENT`` has to be visible while it is fixable.
+        """A stale ``$AGENTBOARD_AGENT`` has to be visible while it is fixable.
 
         Printed afterwards, the card is already mislabelled and the name is
         already in a commit message — which is the failure mode the banner
@@ -729,12 +729,12 @@ class TestStreams(Board):
         self.assertEqual(code, cli.EXIT_DENIED)
         self.assertFalse(document["ok"])
         self.assertIn("ada", document["error"])
-        self.assertEqual(document["lines"][-1], "next: yamlboard ready --as grigory")
+        self.assertEqual(document["lines"][-1], "next: agentboard ready --as grigory")
         self.assertEqual(document["holder"], "ada")
         self.assertEqual(err, "", "no prose may accompany the document")
 
     def test_success_prints_facts_to_stdout_and_only_the_banner_to_stderr(self) -> None:
-        """Two channels, one job each: ``yamlboard claim ... | tee log`` should
+        """Two channels, one job each: ``agentboard claim ... | tee log`` should
         capture the outcome, not the identity chatter."""
         card_id = self.create()
         code, out, err = self.yb("claim", card_id, "--as", "ada")
@@ -766,9 +766,9 @@ class TestStreams(Board):
         self.assertNotIn("claim", self.card(card_id))
 
     def test_a_closed_pipe_exits_141_rather_than_printing_a_traceback(self) -> None:
-        """``yamlboard list --json | head`` closes the reader early.
+        """``agentboard list --json | head`` closes the reader early.
 
-        EPIPE surfacing as a traceback reads as a yamlboard bug, so an agent
+        EPIPE surfacing as a traceback reads as a agentboard bug, so an agent
         files an issue about a command that worked. The code table promises 141
         and a quiet stderr.
         """
@@ -793,7 +793,7 @@ class TestStreams(Board):
     def test_a_pipe_broken_only_at_flush_does_not_hijack_the_exit_code(self) -> None:
         """The flush lives in a ``finally``, so it must not overwrite the verdict.
 
-        If a late EPIPE replaced the code, ``yamlboard check`` on a genuinely
+        If a late EPIPE replaced the code, ``agentboard check`` on a genuinely
         invalid board could report 141 — "the reader stopped" — to a CI job that
         was about to ask why the board is broken.
         """
@@ -896,7 +896,7 @@ class TestInitIsSafe(Board):
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertIn("already holds a board", out)
         self.assertIn("left alone", out)
-        self.assertFalse((self.work / ".yamlboard").exists(),
+        self.assertFalse((self.work / ".agentboard").exists(),
                          "a second store was created inside the tree")
         self.assertEqual(self.card(card_id)["title"], "Work nobody has committed yet")
         self.assertEqual(self.people(), list(self.PEOPLE))
@@ -908,7 +908,7 @@ class TestInitIsSafe(Board):
         fresh.mkdir()
         code, out, err = self.yb("init", "--dir", str(fresh), "--key", "OPS")
         self.assertEqual(code, cli.EXIT_OK, err)
-        self.assertIn("yamlboard create", out)
+        self.assertIn("agentboard create", out)
         self.assertIn("skill install", out)
 
         other = Path(self._tmp.name) / "jsonstore"
@@ -921,10 +921,10 @@ class TestInitIsSafe(Board):
     def test_the_store_lands_where_the_contract_says_it_lives(self) -> None:
         """One file per card is the whole design; a store written to the wrong path
         or shape makes every other verb search the wrong directory."""
-        board_file = self.repo / ".yamlboard" / "board.yaml"
+        board_file = self.repo / ".agentboard" / "board.yaml"
         self.assertTrue(board_file.is_file())
-        self.assertTrue((self.repo / ".yamlboard" / "cards").is_dir())
-        self.assertTrue((self.repo / ".yamlboard" / "archive").is_dir())
+        self.assertTrue((self.repo / ".agentboard" / "cards").is_dir())
+        self.assertTrue((self.repo / ".agentboard" / "archive").is_dir())
         self.assertEqual(self.store.read_board().doc["version"], model.VERSION)
         self.assertNotIn("rev:", board_file.read_text(encoding="utf-8"),
                          "a global rev counter is back; it caused every conflict")
@@ -937,7 +937,7 @@ class TestInitSeedsAnIdentity(Board):
     the CLI creates a person, so a fresh ``init`` used to produce a store where
     every single claim failed -- while its own ``next:`` hint printed the name
     the reader was about to be refused for, and the refusal then pointed at
-    ``yamlboard person add``, a command this tool has never had. The advertised
+    ``agentboard person add``, a command this tool has never had. The advertised
     flow had to work, so the identity the run was named with seeds the roster.
     """
 
@@ -974,7 +974,7 @@ class TestInitSeedsAnIdentity(Board):
         self.assertEqual([str(p["id"]) for p in store.Store(root).read_board().doc["people"]],
                          ["ada"])
 
-    def test_no_identity_found_is_said_out_loud_rather_than_writing_an_empty_board_quietly(self) -> None:
+    def test_no_identity_found_is_said_out_loud_rather_than_left_quiet(self) -> None:
         """With nothing to seed, the roster *is* empty and the reader has to be
         told, because the failure otherwise surfaces two commands later as an
         identity error with no connection to this one.
@@ -1022,7 +1022,7 @@ class TestInitSeedsAnIdentity(Board):
         """
         for name in ("api.py", "cli.py"):
             source = (Path(cli.__file__).parent / name).read_text(encoding="utf-8")
-            self.assertNotIn("yamlboard person", source, name)
+            self.assertNotIn("agentboard person", source, name)
         code, _, err = self.yb("claim", self.create(), "--as", "ghost", "--paths", "x")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("--as ada", err, "the refusal should offer a name that works")
@@ -1113,7 +1113,7 @@ class TestInspection(Board):
         # "nothing written". This used to answer 3 with "next: ready", so the
         # cheap pre-flight told an agent to abandon a card it held.
         self.assertEqual(code, cli.EXIT_OK, err)
-        self.assertNotIn("next: yamlboard ready", out)
+        self.assertNotIn("next: agentboard ready", out)
         self.assertIn(f"renew {one}", out)
 
     def test_a_finished_card_refuses_a_claim_and_says_why(self) -> None:
@@ -1135,7 +1135,7 @@ class TestInspection(Board):
         self.assertIn("finished work", err)
         self.assertIn("Done", err, "the refusal must name where the card sits")
         self.assertNotIn("grigory is already yours", err)
-        self.assertIn("next: yamlboard ready --as grigory", err)
+        self.assertIn("next: agentboard ready --as grigory", err)
         self.assertNotIn("claim", self.card(card_id),
                          "a refused claim must not leave a lease behind")
         self.assertEqual(self.card(card_id), before, "a refusal must not edit the card")
@@ -1415,7 +1415,7 @@ class TestServeExitCodes(Board):
         code, out, err = self.yb("serve", "--dir", str(elsewhere),
                                 "--port", str(taken.getsockname()[1]))
         self.assertEqual(code, cli.EXIT_USAGE)
-        self.assertIn("yamlboard init", err)
+        self.assertIn("agentboard init", err)
         self.assertNotIn("cannot listen", err)
 
     def test_a_served_board_announces_the_file_it_is_writing(self) -> None:
@@ -1518,7 +1518,7 @@ class TestComment(Board):
         verb was added.
         """
         text = (cli.skill_path().parent / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("yamlboard comment", text)
+        self.assertIn("agentboard comment", text)
         self.assertNotIn("card.comment", text, "the skill still names the op, not the verb")
 
 
@@ -1536,7 +1536,7 @@ class TestSkillInstall(Board):
     """
 
     def dest(self, root: Path) -> Path:
-        return root / ".agents" / "skills" / "yamlboard" / "SKILL.md"
+        return root / ".agents" / "skills" / "agentboard" / "SKILL.md"
 
     def test_install_writes_the_bundled_bytes_and_shows_the_agents_block(self) -> None:
         """A repo that ran ``skill install`` must hold exactly the shipped file.
@@ -1556,7 +1556,7 @@ class TestSkillInstall(Board):
         # The AGENTS.md block: runtimes that read that file and never look in
         # .agents/skills/ still have to find the protocol.
         self.assertIn("paste this into AGENTS.md", out)
-        self.assertIn("yamlboard claim", out)
+        self.assertIn("agentboard claim", out)
 
     def test_an_edited_copy_survives_a_plain_reinstall(self) -> None:
         """A local edit to the skill is someone's deliberate decision.
@@ -1644,235 +1644,16 @@ class TestSkillInstall(Board):
         self.assertTrue(reported.is_file())
         package = Path(cli.__file__).resolve().parent
         self.assertEqual(reported.resolve().parent,
-                         (package / "skills" / "yamlboard").resolve())
+                         (package / "skills" / "agentboard").resolve())
 
 
 # --------------------------------------------------------------------------- #
 # the shipped entry point, as a real process
 # --------------------------------------------------------------------------- #
 
-class TestMigrateFidelity(Board):
-    """``migrate`` is the only bridge from v1, and there is no reader behind it.
-
-    A silent loss here is unrecoverable in the worst way: the v1 file still looks
-    fine on disk, so nobody notices the card that did not arrive until someone
-    looks for it months later. So every field the old shape carried is asserted on
-    the way out, and the source file is asserted untouched.
-    """
-
-    V1 = """\
-version: 1
-title: Product
-people:
-  - id: ada
-    name: Ada
-    color: "#7c8797"
-  - id: grigory
-    name: Grigory
-labels:
-  - id: bug
-    name: Bug
-boards:
-  - id: product
-    key: PROD
-    title: Product
-    next_card: 7
-    columns:
-      - id: backlog
-        name: Backlog
-      - id: doing
-        name: Doing
-        wip_limit: 2
-      - id: done
-        name: Done
-        is_done: true
-    custom_fields:
-      - id: customer
-        name: Customer
-        type: select
-        options: [Acme, Globex]
-    cards:
-      - id: PROD-1
-        title: Ship the API
-        desc: |
-          line one
-          line two
-        column: doing
-        labels: [bug]
-        priority: urgent
-        assignee: ada
-        due: 2026-12-01
-        estimate: 3
-        fields:
-          customer: Acme
-      - id: PROD-6
-        title: Already shipped
-        column: done
-        archived: true
-"""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.source = Path(self._tmp.name) / "old.yaml"
-        self.source.write_text(self.V1, encoding="utf-8")
-        self.original = self.source.read_bytes()
-        self.target = Path(self._tmp.name) / "fresh"
-        self.target.mkdir()
-
-    def test_every_field_survives_and_the_source_is_left_alone(self) -> None:
-        code, out, err = self.yb("migrate", str(self.source), "--dir", str(self.target))
-        self.assertEqual(code, cli.EXIT_OK, err)
-        self.assertIn("2 card(s)", out)
-        self.assertEqual(self.source.read_bytes(), self.original,
-                         "migrate rewrote the file it was only supposed to read")
-
-        arrived = store.Store(self.target)
-        self.assertEqual(model.validate(arrived.read_board().doc), [])
-        board = arrived.read_board().doc["boards"][0]
-        self.assertEqual(board["key"], "PROD")
-        # the counter must clear the highest migrated id, or the next create
-        # re-issues PROD-6 and a merge loses one of them
-        self.assertGreaterEqual(board["next_card"], 7)
-        self.assertEqual([c["id"] for c in model.columns(board)],
-                         ["backlog", "doing", "done"])
-        self.assertTrue(model.is_done_column(board, "done"))
-        self.assertEqual(model.find_column(board, "doing")["wip_limit"], 2)
-        self.assertEqual([f["id"] for f in board["custom_fields"]], ["customer"])
-        self.assertEqual([p["id"] for p in arrived.read_board().doc["people"]],
-                         ["ada", "grigory"])
-        self.assertEqual([lbl["id"] for lbl in arrived.read_board().doc["labels"]],
-                         ["bug"])
-
-        one = arrived.read_card("PROD-1").doc
-        self.assertEqual(one["title"], "Ship the API")
-        self.assertEqual(one["column"], "doing")
-        self.assertEqual(one["priority"], "urgent")
-        self.assertEqual(one["assignee"], "ada")
-        self.assertEqual([str(x) for x in one["labels"]], ["bug"])
-        self.assertEqual(one["estimate"], 3)
-        self.assertEqual(one["due"], datetime.date(2026, 12, 1))
-        self.assertEqual(one["desc"], "line one\nline two\n")
-        self.assertEqual(dict(one["fields"]), {"customer": "Acme"})
-
-        # an archived card lives under archive/: the directory is part of the
-        # meaning, and a card in cards/ saying archived: true renders as live
-        self.assertTrue(arrived.card_path("PROD-6", archived=True).is_file())
-        self.assertFalse(arrived.card_path("PROD-6").exists())
-        self.assertTrue(arrived.read_card("PROD-6").doc["archived"])
-
-    def test_a_second_board_in_the_one_file_is_refused_not_silently_dropped(self) -> None:
-        """Two boards cannot share one store without renaming every card id.
-
-        Importing the first and ignoring the second would report success while
-        quietly discarding a whole board's cards.
-        """
-        self.source.write_text(
-            self.source.read_text(encoding="utf-8")
-            + "  - id: personal\n    key: PER\n    title: Personal\n"
-              "    columns:\n      - id: todo\n        name: To do\n    cards: []\n",
-            encoding="utf-8")
-        code, _, err = self.yb("migrate", str(self.source), "--dir", str(self.target))
-        self.assertEqual(code, cli.EXIT_USAGE, err)
-        self.assertIn("2 boards", err)
-        self.assertEqual(list(self.target.iterdir()), [], "it wrote a partial store")
-
-    def test_migrating_into_a_live_store_needs_force(self) -> None:
-        """An overwrite is unrecoverable; "already initialised" is not."""
-        code, _, err = self.yb("migrate", str(self.source), "--dir", str(self.repo))
-        self.assertEqual(code, cli.EXIT_USAGE, err)
-        self.assertEqual(self.store.card_ids(), [], "the refused migrate wrote cards")
-
-    def test_a_second_migrate_never_overwrites_a_card_it_did_not_write(self) -> None:
-        """The one migration failure that cannot be undone.
-
-        ``--force`` merges, and the people and label loops merge by skipping ids
-        already present. Cards used to clobber instead: re-running a migration
-        onto a board that had moved on replaced same-id cards with their v1
-        copies and exited 0. Nothing in git has the newer version -- the store
-        is routinely uncommitted while work is in progress, a card is one file,
-        and there is no diff to notice. Refusing on any id collision is also
-        simply what "migrating twice is refused rather than repeated" means.
-        """
-        first = Path(self._tmp.name) / "target"
-        first.mkdir()
-        self.assertEqual(self.yb("migrate", str(self.source), "--dir", str(first))[0],
-                         cli.EXIT_OK)
-        arrived = store.Store(first)
-        live = arrived.read_card("PROD-1").doc
-        live["title"] = "work done after the migration, never committed"
-        store._write_file(arrived.card_path("PROD-1"), live)
-        retired = arrived.read_card("PROD-6").doc
-        retired["title"] = "retired work rewritten after the migration"
-        store._write_file(arrived.card_path("PROD-6", archived=True), retired)
-
-        code, _, err = self.yb("migrate", str(self.source), "--dir", str(first),
-                               "--force")
-        self.assertEqual(code, cli.EXIT_USAGE)
-        self.assertIn("already exist", err)
-        self.assertIn("PROD-6", err,
-                      "an archived card is invisible to the live view and was clobbered")
-        self.assertEqual(arrived.read_card("PROD-1").doc["title"],
-                         "work done after the migration, never committed")
-        self.assertEqual(arrived.read_card("PROD-6").doc["title"],
-                         "retired work rewritten after the migration")
-
-    def test_merging_into_a_live_board_keeps_what_the_board_added_since(self) -> None:
-        """The guard is about ids, not about making ``--force`` useless: pulling
-        a second legacy file into a board that already has cards of its own is
-        the case the flag exists for.
-
-        "Keeps what is already here" has to mean the board's shape as much as its
-        cards. ``columns`` and ``custom_fields`` used to be assigned wholesale, so
-        a lane the board had added after the migration was replaced by whatever
-        the v1 file named: with a card in it, validation caught that card pointing
-        at a missing column and the whole migration died; with no card in it yet,
-        the lane just disappeared at exit 0, and only a tour of Settings showed a
-        column had gone missing from a board nobody said to re-shape.
-        """
-        # The fixture's board is keyed WEB, so the second file is rewritten to
-        # that key: a key mismatch is refused by a different guard entirely (it
-        # would orphan every id the store already has), which is not this test.
-        other = Path(self._tmp.name) / "legacy.yaml"
-        other.write_text(self.V1.replace("key: PROD", "key: WEB")
-                         .replace("PROD-1", "WEB-40").replace("PROD-6", "WEB-41")
-                         .replace("    custom_fields:",
-                                  "      - id: audit\n        name: Audit\n"
-                                  "    custom_fields:"),
-                         encoding="utf-8")
-        doc = self.store.read_board().doc
-        doc["boards"][0]["columns"].append({"id": "review", "name": "Review"})
-        self.store.write_board(doc)
-
-        code, out, err = self.yb("migrate", str(other), "--dir", str(self.repo),
-                                "--force")
-        self.assertEqual(code, cli.EXIT_OK, err)
-        self.assertIn("2 card(s)", out)
-        self.assertEqual(self.store.read_card("WEB-40").doc["title"], "Ship the API")
-
-        columns = [c["id"] for c in model.columns(self.store.read_board().doc["boards"][0])]
-        self.assertIn("review", columns, "the board's own lane was overwritten by v1")
-        self.assertIn("audit", columns, "and the migrated file's own lane must arrive too")
-
-    def test_migrating_twice_without_force_is_refused_before_anything_is_read(self) -> None:
-        """A different promise from the one above: that guards a card inside a
-        store you agreed to merge into, this one guards the store itself, and it
-        has to hold even when every id happens to be free.
-        """
-        target = Path(self._tmp.name) / "twice"
-        target.mkdir()
-        self.assertEqual(self.yb("migrate", str(self.source), "--dir", str(target))[0],
-                         cli.EXIT_OK)
-        before = sorted(p.name for p in (target / ".yamlboard" / "cards").iterdir())
-        code, _, err = self.yb("migrate", str(self.source), "--dir", str(target))
-        self.assertEqual(code, cli.EXIT_USAGE)
-        self.assertIn("--force", err)
-        self.assertEqual(sorted(p.name for p in (target / ".yamlboard" / "cards").iterdir()),
-                         before)
-
-
 class TestRealProcess(Board):
     """Only what cannot be true in-process: a real exit status from
-    ``python -m yamlboard.cli``, and git's view of the files afterwards.
+    ``python -m agentboard.cli``, and git's view of the files afterwards.
 
     ``main()``'s return value is not the same contract as a process exit status:
     the module-level ``sys.exit`` and argparse's own refusals both sit between
@@ -1882,10 +1663,10 @@ class TestRealProcess(Board):
     def setUp(self) -> None:
         super().setUp()
         self.env = {**os.environ, **GIT_ENV}
-        self.env.pop("YAMLBOARD_AGENT", None)
+        self.env.pop("AGENTBOARD_AGENT", None)
 
     def proc(self, *argv: str) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, "-m", "yamlboard.cli", *argv],
+        return subprocess.run([sys.executable, "-m", "agentboard.cli", *argv],
                               cwd=str(self.repo), capture_output=True,
                               text=True, env=self.env, timeout=120)
 
@@ -1924,12 +1705,12 @@ class TestRealProcess(Board):
 
         self.assertEqual(self.proc("claim", "WEB-1", "--as", "ada",
                                    "--paths", "src/api/**").returncode, cli.EXIT_OK)
-        self.assertEqual(dirty(self.repo), [".yamlboard/cards/WEB-1.yaml"],
+        self.assertEqual(dirty(self.repo), [".agentboard/cards/WEB-1.yaml"],
                          "a claim must touch one card file and nothing else")
 
         self.assertEqual(self.proc("claim", "WEB-1", "--as", "ada",
                                    "--paths", "src/api/**").returncode, cli.EXIT_OK)
-        self.assertEqual(dirty(self.repo), [".yamlboard/cards/WEB-1.yaml"],
+        self.assertEqual(dirty(self.repo), [".agentboard/cards/WEB-1.yaml"],
                          "re-claiming the same card changed bytes again")
 
 

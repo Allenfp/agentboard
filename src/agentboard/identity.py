@@ -15,11 +15,12 @@ assignee nobody recognises, and the mistake would only surface weeks later in a
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from . import gitops, model
 
-ENV_VAR = "YAMLBOARD_AGENT"
+ENV_VAR = "AGENTBOARD_AGENT"
 
 
 class UnknownAgent(Exception):
@@ -58,7 +59,7 @@ def candidate(
     *,
     as_flag: str | None = None,
     root: Path | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> str | None:
     """The name this run would act as, before the board is asked to confirm it.
 
@@ -68,8 +69,8 @@ def candidate(
     would reject the very identity that has to seed it. Returning None means
     nobody is named, and callers decide whether that is a default or an error.
     """
-    env = os.environ if env is None else env
-    raw = as_flag or env.get(ENV_VAR) or from_git_email(root)
+    source: Mapping[str, str] = os.environ if env is None else env
+    raw = as_flag or source.get(ENV_VAR) or from_git_email(root)
     text = str(raw).strip() if raw else ""
     return text if model.SLUG_RE.match(text) else None
 
@@ -79,16 +80,16 @@ def resolve(
     *,
     as_flag: str | None = None,
     root: Path | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> str:
-    """The agent to act as: ``--as``, else ``$YAMLBOARD_AGENT``, else git config.
+    """The agent to act as: ``--as``, else ``$AGENTBOARD_AGENT``, else git config.
 
     Raises :class:`UnknownAgent` rather than defaulting to a name. "Just call it
     *agent*" would put a phantom person on the board and make the claim
     unattributable, which defeats the point of recording it at all.
     """
-    env = os.environ if env is None else env
-    raw = as_flag or env.get(ENV_VAR) or from_git_email(root)
+    source: Mapping[str, str] = os.environ if env is None else env
+    raw = as_flag or source.get(ENV_VAR) or from_git_email(root)
     if not raw or not str(raw).strip():
         raise UnknownAgent(
             f"no agent: pass --as <name> or set {ENV_VAR}",
@@ -117,7 +118,7 @@ def check(doc: dict | None, name: str) -> str:
 def banner(name: str, *, source: str | None = None) -> str:
     """The line printed before a mutating write, naming the identity in use.
 
-    Printed *first* on purpose: an agent whose ``$YAMLBOARD_AGENT`` is stale
+    Printed *first* on purpose: an agent whose ``$AGENTBOARD_AGENT`` is stale
     should see that before the wrong name reaches a commit message.
     """
     return f"as {name}" + (f" ({source})" if source else "")

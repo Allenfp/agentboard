@@ -9,7 +9,7 @@ small file per card, plus board-level configuration that changes rarely.
 ## Requirements
 
 ### Requirement: The board is a directory
-The system SHALL store a board as a directory named `.yamlboard/` inside the
+The system SHALL store a board as a directory named `.agentboard/` inside the
 repository it coordinates, containing a board configuration file, one file per
 card, and an archive directory for retired cards. The system SHALL NOT keep card
 data in the board configuration file.
@@ -59,16 +59,16 @@ control SHALL be per file.
 Every file in the store SHALL declare the schema version it was written by. A file
 whose version exceeds what the build understands SHALL be refused with a message
 naming the version found, the versions understood, and the way forward. A file at
-an older understood version SHALL be refused with a pointer to the migration
-command.
+a lower version SHALL be refused the same way: there is no migration command to
+point at, so the message names an action instead.
 
 #### Scenario: A newer file than the build
 - **WHEN** a store declares a version this build does not understand
 - **THEN** reading it fails with both version numbers named and nothing is written
 
-#### Scenario: An un-migrated store
-- **WHEN** a store still uses the single-file format
-- **THEN** the command refuses and names the migration command rather than silently reading it
+#### Scenario: An older store than the build
+- **WHEN** a store declares a version this build did not write
+- **THEN** the command refuses and names an action (start a new board, or restore a backup) rather than silently reading it
 
 ### Requirement: Card ids are minted without re-issuing
 Card ids SHALL be a board key prefix, a hyphen, and a number. Each board SHALL

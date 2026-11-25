@@ -1,7 +1,7 @@
 """HTTP surface, path confinement, read-only mode and the git commit button.
 
 The store here is real: a git repo in a temp directory holding a real
-``.yamlboard/`` (``board.yaml`` plus ``cards/<ID>.yaml``), written through the
+``.agentboard/`` (``board.yaml`` plus ``cards/<ID>.yaml``), written through the
 same ``api`` the CLI uses and committed with the same git the operator runs.
 Nothing is mocked except the tests whose whole subject is a failure mode (a
 vanished file, a leaked traceback).
@@ -38,14 +38,21 @@ from pathlib import Path
 from unittest import mock
 
 from test_gitops import GIT_ENV
-from yamlboard import __version__, api, gitops, model, store
-from yamlboard.server import (INTERNAL_ERROR, Application, is_loopback, local_hosts,
-                             make_server, resolve_static)
+
+from agentboard import __version__, api, gitops, model, store
+from agentboard.server import (
+    INTERNAL_ERROR,
+    Application,
+    is_loopback,
+    local_hosts,
+    make_server,
+    resolve_static,
+)
 
 #: The two per-machine artefacts a real repo ignores (docs/store.md, "Private boards").
 #: Without them the Commit button stages the advisory flock, and every other
 #: clone conflicts with a file that means nothing.
-GITIGNORE = "**/.yamlboard/.lock\n**/.yamlboard/.tmp-*.yaml\n"
+GITIGNORE = "**/.agentboard/.lock\n**/.agentboard/.tmp-*.yaml\n"
 
 
 class Stderr:
@@ -84,7 +91,7 @@ def git(cwd: Path, *args: str) -> str:
 
 
 def make_repo(where: Path) -> store.Store:
-    """A committed repo holding a real ``.yamlboard/`` with one card, ``WEB-1``.
+    """A committed repo holding a real ``.agentboard/`` with one card, ``WEB-1``.
 
     The commit matters: the tests below assert commit counts and "nothing to
     commit", which only mean something against a tree that started clean.
@@ -97,7 +104,7 @@ def make_repo(where: Path) -> store.Store:
     git(repo, "config", "commit.gpgsign", "false")
     (repo / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
 
-    # ``Store`` wants the repo root (or the .yamlboard directory) - never a
+    # ``Store`` wants the repo root (or the .agentboard directory) - never a
     # card file: there is no single data file to hand it any more.
     board = store.Store(repo)
     board.create("Test", key="WEB")
@@ -210,7 +217,7 @@ class TestBasics(Http):
         """
         status, body = self.get("/")
         self.assertEqual(status, 200)
-        self.assertIn(b"<title>yamlboard", body.lower())
+        self.assertIn(b"<title>agentboard", body.lower())
         for asset in ("/app.js", "/styles.css"):
             status, body = self.get(asset)
             self.assertEqual(status, 200, asset)
@@ -285,12 +292,13 @@ class TestBasics(Http):
             urllib.request.urlopen(request, timeout=5)
         self.assertEqual(caught.exception.code, 400)
 
-    def test_a_version_1_store_is_refused_and_names_migrate(self) -> None:
-        """Pointing the server at an un-migrated board must not serve a board.
+    def test_an_older_store_is_refused_and_not_served(self) -> None:
+        """Pointing the server at a board it did not write must not serve a board.
 
-        There is no v1 reader, on purpose: reading the old file would show zero
-        cards and zero leases, and an agent that trusts an empty ``ready`` list
-        edits files another agent is holding. The refusal has to name the fix.
+        There is no reader for another version, on purpose: reading the old file
+        would show zero cards and zero leases, and an agent that trusts an empty
+        ``ready`` list edits files another agent is holding. The refusal has to
+        carry the action, not just the complaint.
         """
         self.store.board_path.write_text(
             "version: 1\ntitle: Old\nrev: 7\npeople: []\nlabels: []\nboards: []\n",
@@ -298,7 +306,7 @@ class TestBasics(Http):
         status, body = self.get("/api/state")
         self.assertEqual(status, 422)
         self.assertFalse(body["ok"])
-        self.assertTrue(any("migrate" in e for e in body["errors"]), body["errors"])
+        self.assertTrue(any("nothing was read" in e for e in body["errors"]), body["errors"])
         self.assertTrue(any("rev" in e for e in body["errors"]), body["errors"])
 
 
@@ -505,7 +513,7 @@ class TestWrites(Http):
 
         Validation runs over the whole store before the first byte moves, so a
         payload that would leave any card unreadable cannot leave a file on disk
-        that every later read - including ``yamlboard check`` - then fails on.
+        that every later read - including ``agentboard check`` - then fails on.
         """
         self.apply("card.update", id="WEB-1", patch={"title": "Real"})
         text = self.card.read_text(encoding="utf-8")
@@ -810,7 +818,7 @@ class TestPathConfinement(unittest.TestCase):
         it - so a readable ``~/.ssh/id_rsa`` is a full-disk oracle on the machine
         that runs the board.
         """
-        root = Path(__file__).resolve().parents[1] / "src" / "yamlboard" / "static"
+        root = Path(__file__).resolve().parents[1] / "src" / "agentboard" / "static"
         self.assertTrue(root.is_dir(), "static dir must exist for this suite to mean anything")
         self.assertIsNotNone(resolve_static("/"))
         self.assertIsNotNone(resolve_static("styles.css"))
@@ -825,9 +833,9 @@ class TestPathConfinement(unittest.TestCase):
         package-data glob) would otherwise hand out whatever it points at
         outside it.
         """
-        import yamlboard.server as server_module
+        import agentboard.server as server_module
         # the link lives in a temp static dir, never the shipped package: a crash
-        # between symlink and unlink would leave it in src/yamlboard/static/,
+        # between symlink and unlink would leave it in src/agentboard/static/,
         # where package-data globs it into the wheel
         sandbox = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, sandbox, True)
@@ -857,13 +865,13 @@ class TestGitButton(Http):
         """
         self.apply("card.create", board=self.board_id, title="Committed card")
         (self.repo / "unrelated.txt").write_text("do not commit me", encoding="utf-8")
-        status, out = self.post("/api/commit", {"message": "yamlboard: add a card"})
+        status, out = self.post("/api/commit", {"message": "agentboard: add a card"})
         self.assertEqual(status, 200, out)
         self.assertTrue(out["committed"], out)
         self.assertTrue(out["sha"])
         files = self.head_files()
-        self.assertIn(".yamlboard/cards/WEB-2.yaml", files)
-        self.assertEqual([p for p in files if not p.startswith(".yamlboard/")], [], files)
+        self.assertIn(".agentboard/cards/WEB-2.yaml", files)
+        self.assertEqual([p for p in files if not p.startswith(".agentboard/")], [], files)
         again = self.post("/api/commit", {"message": "the same card twice"})
         self.assertEqual((again[0], again[1]["reason"]), (200, "nothing to commit"), again)
         self.assertIn("unrelated.txt", self.porcelain())
@@ -879,13 +887,13 @@ class TestGitButton(Http):
         self.assertTrue((self.store.root / ".lock").is_file(), "no lock, no test")
         (self.store.root / ".tmp-cafebabe.yaml").write_text("interrupted save\n",
                                                             encoding="utf-8")
-        status, out = self.post("/api/commit", {"message": "yamlboard: cards only"})
+        status, out = self.post("/api/commit", {"message": "agentboard: cards only"})
         self.assertEqual(status, 200, out)
         self.assertTrue(out["committed"])
         self.assertEqual([p for p in self.head_files()
                           if "/.lock" in p or "/.tmp-" in p], [], self.head_files())
         # gitignored, not deleted and not staged: still sitting there, untracked
-        self.assertIn("! .yamlboard/.tmp-cafebabe.yaml",
+        self.assertIn("! .agentboard/.tmp-cafebabe.yaml",
                       git(self.repo, "status", "--porcelain=v2", "--ignored=matching", "-uall"))
         self.assertEqual(git(self.repo, "diff", "--cached", "--name-only"), "")
 
@@ -934,7 +942,7 @@ class TestGitButton(Http):
         results: list = []
 
         def commit() -> None:
-            results.append(self.post("/api/commit", {"message": "yamlboard: concurrent"}))
+            results.append(self.post("/api/commit", {"message": "agentboard: concurrent"}))
 
         threads = [threading.Thread(target=commit) for _ in range(4)]
         for thread in threads:
@@ -948,7 +956,7 @@ class TestGitButton(Http):
         self.assertEqual(self.commit_count(), 2)
 
     def test_an_empty_message_gets_the_tools_own_prefix(self) -> None:
-        """``yamlboard: <board>``, not ``boards(boards.yaml): ...``.
+        """``agentboard: <board>``, not ``boards(boards.yaml): ...``.
 
         The board is a directory now and one commit names many files; a subject
         naming one of them describes a fifth of the change, and the old prefix
@@ -959,7 +967,7 @@ class TestGitButton(Http):
         self.assertEqual(status, 200, out)
         self.assertTrue(out["committed"])
         subject = git(self.repo, "log", "-1", "--format=%s")
-        self.assertTrue(subject.startswith("yamlboard: "), subject)
+        self.assertTrue(subject.startswith("agentboard: "), subject)
         self.assertIn("Test", subject)
         self.assertFalse(subject.startswith("boards("), subject)
 
@@ -979,21 +987,21 @@ class TestGitStatus(Http):
         self.assertIsNone(payload["error"])
         self.assertEqual(
             sorted(p for p in payload["changed"] if p.endswith(".yaml")),
-            [".yamlboard/board.yaml", ".yamlboard/cards/WEB-2.yaml"])
+            [".agentboard/board.yaml", ".agentboard/cards/WEB-2.yaml"])
 
     def test_a_committed_board_stops_reporting_itself_dirty(self) -> None:
         """The Commit button must go quiet once the board is committed.
 
         An ignored porcelain record names a path, and only one path means
         anything: the board directory itself, which is what git reports when the
-        whole ``.yamlboard/`` was never committed and a ``.gitignore`` hides it.
+        whole ``.agentboard/`` was never committed and a ``.gitignore`` hides it.
         The two per-machine artefacts ignored on purpose -- the ``.lock`` every
         read leaves, an interrupted save's ``.tmp-*.yaml`` -- are not the board's
         work, and counting them kept the toolbar saying "uncommitted changes"
         forever on a tree with nothing to save.
         """
         self.apply("card.create", board=self.board_id, title="Committed now")
-        committed = self.post("/api/commit", {"message": "yamlboard: committed"})
+        committed = self.post("/api/commit", {"message": "agentboard: committed"})
         self.assertTrue(committed[1]["committed"], committed)
         self.assertEqual(self.porcelain(), "", "git itself calls the tree clean")
         self.assertTrue((self.store.root / ".lock").is_file(), "the artefact under test")
@@ -1010,7 +1018,7 @@ class TestGitStatus(Http):
         agent overwriting the first -- which is why the spec says it SHALL be
         reported. The dirty list is therefore repo-wide (``gitops.changed_paths``)
         rather than the board directory's path-scoped status, which could name
-        nothing outside ``.yamlboard/`` and so made the check unreachable.
+        nothing outside ``.agentboard/`` and so made the check unreachable.
 
         The board's own Commit count stays board-scoped: it has to match what
         ``/api/commit`` will stage, so the two lists are deliberately different.
@@ -1242,14 +1250,14 @@ class TestUnroutableRequests(Http):
         self.assertGreater(int(response.headers["Content-Length"]), 100)
 
     def test_the_server_header_advertises_nothing_about_the_runtime(self) -> None:
-        """``Server: yamlboard`` alone; the stdlib appends the Python version.
+        """``Server: agentboard`` alone; the stdlib appends the Python version.
 
         That is a free runtime inventory for anyone probing the port, and it is
         the cheapest thing to stop leaking.
         """
         status, _, headers = self.raw("GET", "/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(headers["Server"], "yamlboard")
+        self.assertEqual(headers["Server"], "agentboard")
         self.assertNotIn("Python/", headers["Server"])
 
 

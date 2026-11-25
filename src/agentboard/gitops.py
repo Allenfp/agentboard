@@ -2,7 +2,7 @@
 
 Deliberately narrow: git runs only through :func:`_run`, with a fixed argv list,
 no shell, and always rooted at the directory :func:`repo_root` found.  The
-caller picks that directory by launching yamlboard against a file inside a repo
+caller picks that directory by launching agentboard against a file inside a repo
 they own.  That is a *convention*, not a sandbox: a repo you did not write can
 still run code through git, so every call passes ``-c core.fsmonitor=false`` --
 ``git status`` executes ``core.fsmonitor`` and this module calls ``status`` on
@@ -10,7 +10,7 @@ every poll, which made merely *serving* a board a code-execution path.
 
 Repo hooks (``.git/hooks``, ``core.hooksPath``) still run on Commit, on purpose:
 a hook the user installed is theirs, and skipping it to guard against a hostile
-repo would also switch off a check they asked for.  Pointing yamlboard at a
+repo would also switch off a check they asked for.  Pointing agentboard at a
 directory you do not control is therefore unsupported, full stop.  ``_env``
 drops the ambient variables that would point git at another repository.
 """
@@ -236,7 +236,7 @@ def config_value(root: Path, key: str) -> str | None:
 def status(target: Path) -> RepoStatus:
     """Repo shape for the toolbar: branch, dirty-or-not, commits ahead.
 
-    ``target`` is the ``.yamlboard`` directory now rather than one data file, and
+    ``target`` is the ``.agentboard`` directory now rather than one data file, and
     that is the whole point of the split: a pathspec on a directory makes every
     card file individually visible in git status, where the old single file made
     two agents' unrelated edits land on the same line.
@@ -443,12 +443,12 @@ def commit(target: Path, message: str) -> dict:
 
 
 def default_message(target: Path, summary: str) -> str:
-    """``yamlboard: claim WEB-3 - the API layer``.
+    """``agentboard: claim WEB-3 - the API layer``.
 
     Prefixed with the tool rather than the filename the way the single-file store
     did (``boards(boards.yaml): ...``): the board is a directory now, its files
     are named per card, and a log line naming one of them would describe only a
-    fifth of the commit. ``yamlboard:`` is what a reader greps for.
+    fifth of the commit. ``agentboard:`` is what a reader greps for.
     """
     summary = " ".join(summary.split())[:120]
-    return f"yamlboard: {summary}" if summary else "yamlboard: update"
+    return f"agentboard: {summary}" if summary else "agentboard: update"

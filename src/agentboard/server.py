@@ -55,7 +55,7 @@ CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
 }
-INTERNAL_ERROR = "the server could not complete that; see the terminal yamlboard runs in"
+INTERNAL_ERROR = "the server could not complete that; see the terminal agentboard runs in"
 CSP_HTML = "frame-ancestors 'none'"
 
 
@@ -105,7 +105,7 @@ class _Answered(Exception):
 class Application:
     """The one owner of the store, and of the one-op-one-snapshot rule.
 
-    ``store_root`` is the ``.yamlboard`` directory (or its parent - ``Store``
+    ``store_root`` is the ``.agentboard`` directory (or its parent - ``Store``
     accepts either), which is also the git pathspec the Commit button stages.
     One absolute value owns both, because the two disagreeing is how a board
     ended up reported as committed while the file the UI named was elsewhere.
@@ -142,7 +142,7 @@ class Application:
         glob says are one person's. Reported, never blocked: a dirty tree is
         normal, and refusing to serve over it would make the board useless.
 
-        Repo-wide, not the board directory: a pathspec of ``.yamlboard`` can only
+        Repo-wide, not the board directory: a pathspec of ``.agentboard`` can only
         name board files, so no source path would match and the check would look
         satisfied while being unreachable. ``payload``'s ``git`` stays
         board-scoped, because the toolbar counts what Commit will stage.
@@ -217,7 +217,7 @@ class Application:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "yamlboard"
+    server_version = "agentboard"
     protocol_version = "HTTP/1.1"
     # A client that declares a body and stops writing would otherwise hold its
     # thread open forever; ``_route`` turns the resulting TimeoutError into a 408.
@@ -228,13 +228,16 @@ class Handler(BaseHTTPRequestHandler):
     # -- plumbing --------------------------------------------------------- #
 
     def version_string(self) -> str:
-        """``Server: yamlboard`` alone - the stdlib default appends the Python
+        """``Server: agentboard`` alone - the stdlib default appends the Python
         version, which is a free runtime inventory for anyone probing the port."""
         return self.server_version
 
-    def log_message(self, fmt: str, *args: object) -> None:  # quieter default
-        if self.server.log_requests:  # type: ignore[attr-defined]
-            super().log_message(fmt, *args)
+    def log_message(self, format: str, *args: object) -> None:
+        """Silent unless ``-v``: the default logs every poll, which is a wall of
+        text three seconds wide. ``format`` is the base class's own parameter
+        name, and overriding it with a prettier one is a signature change."""
+        if getattr(self.server, "log_requests", False):
+            super().log_message(format, *args)
 
     def _send(self, status: int, body: bytes, content_type: str, extra: dict | None = None) -> None:
         self.send_response(status)
@@ -276,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
         flattening a whole traceback onto one access-log line with literal
         ``\\x0a`` where the newlines were.
         """
-        print(f"yamlboard: {str(detail).rstrip()}", file=sys.stderr, flush=True)
+        print(f"agentboard: {str(detail).rstrip()}", file=sys.stderr, flush=True)
         self._error(HTTPStatus.INTERNAL_SERVER_ERROR, INTERNAL_ERROR)
 
     def _refuse(self, status: int, message: str, **extra: Any) -> NoReturn:

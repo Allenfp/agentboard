@@ -1,4 +1,4 @@
-"""Schema, validation and rules for a yamlboard store.
+"""Schema, validation and rules for a agentboard store.
 
 The parsed YAML mapping *is* the model: hand-editing a card stays possible, and
 every write goes through this same document so comments and key order survive.
@@ -18,11 +18,12 @@ import fnmatch
 import math
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 #: What this build writes, and the highest version it will read. A file at a
-#: lower version is refused with a pointer to `yamlboard migrate`; there is no
-#: second reader, because a silently-misread board is worse than a loud refusal.
+#: different version is refused, never upgraded in place: there is no second
+#: reader and no migration bridge, because a silently-misread board is worse
+#: than a loud refusal.
 VERSION = 2
 
 PRIORITIES = ("none", "low", "med", "high", "urgent")
@@ -84,27 +85,32 @@ class ValidationError(Exception):
 # type predicates
 # --------------------------------------------------------------------------- #
 
-def is_str(value: Any) -> bool:
+#: Each one is a TypeGuard, not a bool: the payload a caller reads out of a card
+#: is `Any`, and a predicate that answers only "yes" leaves a type checker blind
+#: to what the caller then does with it. Narrowing here is what lets pyright see
+#: that `if not is_map(patch): raise` means `patch` is a mapping for the rest of
+#: the function. The names stay `is_*`, because they are published surface (P13).
+def is_str(value: Any) -> TypeGuard[str]:
     return isinstance(value, str)
 
 
-def is_int(value: Any) -> bool:
+def is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def is_num(value: Any) -> bool:
+def is_num(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def is_bool(value: Any) -> bool:
+def is_bool(value: Any) -> TypeGuard[bool]:
     return isinstance(value, bool)
 
 
-def is_list(value: Any) -> bool:
+def is_list(value: Any) -> TypeGuard[list]:
     return isinstance(value, list)
 
 
-def is_map(value: Any) -> bool:
+def is_map(value: Any) -> TypeGuard[dict]:
     return isinstance(value, dict)
 
 
@@ -707,6 +713,19 @@ def _check_color(value: Any, path: str, errors: list[str]) -> None:
         errors.append(f"{path}: color must be a hex string like '#2f6f4f'")
 
 
+def _check_text(item: dict, key: str, path: str, errors: list[str]) -> None:
+    """``item[key]`` has to be present, text, and not just spaces.
+
+    It takes the mapping and the key rather than the value so the rule and its
+    message live once: the six required-text fields on a board were six copies
+    of the same two lines, which is how one of them ends up saying "required"
+    in different words from the others.
+    """
+    value = item.get(key)
+    if not is_str(value) or not value.strip():
+        errors.append(f"{path}.{key}: required, non-empty text")
+
+
 def _check_when(value: Any, path: str, errors: list[str]) -> None:
     """created/updated/claim.at: a datetime, a date, or a strict ISO string."""
     if value is None:
@@ -792,8 +811,7 @@ def _validate_card(
             f"{board.get('key')!r}"
         )
 
-    if not is_str(card.get("title")) or not card.get("title").strip():
-        errors.append(f"{path}.title: required, non-empty text")
+    _check_text(card, "title", path, errors)
     if not is_str(card.get("desc")) and card.get("desc") is not None:
         errors.append(f"{path}.desc: expected text")
 
@@ -918,7 +936,8 @@ def validate(doc: Any) -> list[str]:
     elif version < VERSION:
         errors.append(
             f"version: file says {version}, this build writes {VERSION} - "
-            "run 'yamlboard migrate' or start a new board"
+            "nothing was read; start a new board, or restore a backup written "
+            f"by a build that wrote version {version}"
         )
 
     if "title" in doc and not is_str(doc["title"]):
@@ -936,8 +955,7 @@ def validate(doc: Any) -> list[str]:
         _check_keys(person, PEOPLE_KEYS, path, errors)
         if not is_str(person.get("id")) or not SLUG_RE.match(str(person.get("id"))):
             errors.append(f"{path}.id: expected a slug like 'allen'")
-        if not is_str(person.get("name")) or not person.get("name").strip():
-            errors.append(f"{path}.name: required, non-empty text")
+        _check_text(person, "name", path, errors)
         _check_color(person.get("color"), path, errors)
     _dupe_ids(people_list, "person", "document.people", errors)
 
@@ -953,8 +971,7 @@ def validate(doc: Any) -> list[str]:
         _check_keys(label, LABEL_KEYS, path, errors)
         if not is_str(label.get("id")) or not SLUG_RE.match(str(label.get("id"))):
             errors.append(f"{path}.id: expected a slug like 'bug'")
-        if not is_str(label.get("name")) or not label.get("name").strip():
-            errors.append(f"{path}.name: required, non-empty text")
+        _check_text(label, "name", path, errors)
         _check_color(label.get("color"), path, errors)
     _dupe_ids(label_list, "label", "document.labels", errors)
 
@@ -986,8 +1003,7 @@ def validate(doc: Any) -> list[str]:
             errors.append(f"{path}.key: duplicate board key {board_key_value!r}")
         else:
             board_keys.add(board_key_value)
-        if not is_str(board.get("title")) or not board.get("title").strip():
-            errors.append(f"{path}.title: required, non-empty text")
+        _check_text(board, "title", path, errors)
 
         if not is_list(board.get("columns")) or not board.get("columns"):
             errors.append(f"{path}.columns: expected a non-empty list")
@@ -1002,8 +1018,7 @@ def validate(doc: Any) -> list[str]:
             _check_keys(column, COLUMN_KEYS, c_path, errors)
             if not is_str(column.get("id")) or not SLUG_RE.match(str(column.get("id"))):
                 errors.append(f"{c_path}.id: expected a slug like 'doing'")
-            if not is_str(column.get("name")) or not column.get("name").strip():
-                errors.append(f"{c_path}.name: required, non-empty text")
+            _check_text(column, "name", c_path, errors)
             _check_color(column.get("color"), c_path, errors)
             limit = column.get("wip_limit")
             if limit is not None and (not is_int(limit) or limit < 1):
@@ -1025,8 +1040,7 @@ def validate(doc: Any) -> list[str]:
             _check_keys(spec, CUSTOM_KEYS, f_path, errors)
             if not is_str(spec.get("id")) or not SLUG_RE.match(str(spec.get("id"))):
                 errors.append(f"{f_path}.id: expected a slug like 'customer'")
-            if not is_str(spec.get("name")) or not spec.get("name").strip():
-                errors.append(f"{f_path}.name: required, non-empty text")
+            _check_text(spec, "name", f_path, errors)
             if spec.get("type", "text") not in FIELD_TYPES:
                 errors.append(f"{f_path}.type: expected one of {', '.join(FIELD_TYPES)}")
             if not is_list(spec.get("options", [])):
@@ -1049,13 +1063,14 @@ def validate(doc: Any) -> list[str]:
             except ValidationError as exc:
                 errors.extend(f"{path}.lease_ttl: {e}" for e in exc.errors)
 
-        # `cards:` is what a v1 file or a hand-edit reaches for. It is not in
-        # BOARD_KEYS, so the unknown-key check above already said so - this line
-        # points at the fix instead of leaving a person to guess.
+        # `cards:` is what a hand-edit reaches for when it expects the cards to
+        # live inside the board. It is not in BOARD_KEYS, so the unknown-key
+        # check above already said so - this line points at the fix instead of
+        # leaving a person to guess.
         if "cards" in board:
             errors.append(
-                f"{path}.cards: cards live in cards/<ID>.yaml since version 2 - "
-                "run 'yamlboard migrate'"
+                f"{path}.cards: cards live in cards/<ID>.yaml, one file each - "
+                "a board never holds them"
             )
 
     return errors
@@ -1111,8 +1126,9 @@ def set_field(item: dict, kind: str, key: str, value: Any) -> None:
         if rank > wanted:
             position = index
             break
-    if hasattr(item, "insert"):
-        item.insert(position, key, value)
+    insert = getattr(item, "insert", None)
+    if callable(insert):
+        insert(position, key, value)
         return
     # a plain dict (built before its first save) can only order itself by
     # rebuilding: reassigning an existing key does not move it.

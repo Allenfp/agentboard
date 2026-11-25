@@ -73,7 +73,7 @@ SHALL be distinguishable from other failures by exit status alone.
 Every command SHALL accept a flag producing a single JSON document on standard
 output with no prose on either stream. Without that flag, human facts SHALL go to
 standard output one per line and only the identity banner to standard error:
-`yamlboard claim ... | tee log` should capture what happened, not the chatter
+`agentboard claim ... | tee log` should capture what happened, not the chatter
 around it, and a scripted caller opts into the flag rather than learning which
 lines of prose to discard.
 
@@ -110,9 +110,9 @@ take it and, if not, why, in one call.
 The command line SHALL expose: initialising a store, serving the dashboard,
 creating a card, validating and summarising the store, showing one card, listing
 cards, listing ready cards, claiming, renewing, releasing, finishing, editing
-dependencies, commenting on a card, reporting and resolving conflicts, migrating
-an old store, and installing or locating the agent skill. Command help SHALL
-document the exit codes, including the claim-denied code.
+dependencies, commenting on a card, reporting and resolving conflicts, and
+installing or locating the agent skill. Command help SHALL document the exit
+codes, including the claim-denied code.
 
 #### Scenario: Validation replaces the old inspection flags
 - **WHEN** a person asks whether a store is valid
@@ -132,21 +132,16 @@ pointed at the command line and never at the transport.
 - **THEN** a `comment` verb performs exactly that
 - **AND** a prescribed step with no command is a dead end an agent can only fail at
 
-### Requirement: Migration is one-shot
-The system SHALL convert a single-file board into the directory store, preserving
-titles, columns, people, labels, custom field definitions, card content and card
-order, and SHALL NOT read the old format anywhere else. Migrating an already-migrated
-store SHALL be refused rather than repeated.
+### Requirement: There is no migration bridge
+The system SHALL NOT read, convert, or accept a board written by another version,
+and SHALL NOT ship a converter. A store is created by `init` or it does not
+exist: an import path is a second reader, and a second reader is how a board
+gets silently misread.
 
-#### Scenario: An old board converts
-- **WHEN** a single-file board is migrated
-- **THEN** every card exists as its own file with its original id and fields, the board configuration carries the columns, people, labels and field definitions, and the validator accepts the result
+#### Scenario: A store from another version
+- **WHEN** a store declares a `version` this build did not write
+- **THEN** every verb refuses, nothing is written, and the message names an action (start a new board, or restore a backup) rather than a command that does not exist
 
-#### Scenario: Migrating twice
-- **WHEN** migration is run on a store already in the new format
-- **THEN** it is refused and nothing is overwritten
-
-#### Scenario: Merging a second file into a live board
-- **WHEN** migration runs with `--force` on a board that has changed shape since — a column or field definition its own cards use
-- **THEN** the cards and definitions the file brings are added, and the board keeps every column, people and field it already had
-- **AND** a card id present in both is refused with nothing written
+#### Scenario: A converter is proposed
+- **WHEN** a change would add a reader for a second store shape
+- **THEN** it is rejected as a design change to this requirement, not a feature

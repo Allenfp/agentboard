@@ -35,11 +35,16 @@ not a defect.
   New code goes under its own layer, never appended to the end of the file.
 - **P5** Two blank lines around top-level defs and classes.
 - **P6** Import order: `__future__` → stdlib → third-party → local → constants.
-  A `# noqa` always carries the reason in a comment.
+  A `# noqa` always carries the reason in a comment. `ruff`'s `I001`/`I002` check
+  this, so it is a build failure and not a review comment.
 
 ## Python
 
-- **P7** Annotate every function, both directions.
+- **P7** Annotate every function, both directions. `pyright` (config in
+  `pyproject.toml`, `include = ["src"]`) checks it, which is the difference
+  between a rule and an intention: the annotation a caller reads has to be the
+  one the checker believes. `tests/` is out of the include list until the JS
+  harness stubs stop being `Any` soup (docs/UPGRADES.md).
 - **P8** Return types stay coarse: `-> dict:`, `-> list:`, `Any` for an opaque
   payload, `Any | None` for "maybe not there". Never `dict[str, Any]` as a
   return type — the shape is not the point. Exception: a *local* accumulator
@@ -78,7 +83,9 @@ not a defect.
   testable without sleeping.
 - **P16** 100 columns in Python, no tabs, no trailing whitespace. JS and CSS
   have no width rule — a CSS one-liner per selector is the house style, so a
-  long CSS line is never a finding.
+  long CSS line is never a finding. `ruff`'s `E5`/`W29x` enforce the Python
+  half against `line-length` in `pyproject.toml`, which is the one place the
+  number is written.
 
 ## JavaScript (`app.js` is one file by decision — no bundler, no split)
 
@@ -107,9 +114,9 @@ not a defect.
   continuation aligned under the first word.
 - **P23** Double quotes (single quotes only inside ICONS SVG data), semicolons,
   2-space indent, one blank line between functions.
-- **P24** Prefs live in `localStorage` under `yb.*` (`yb.theme`, `yb.view`,
-  `yb.density`, `yb.agent`). Never in the board file: prefs are per-browser, the
-  file is shared and committed. `yb.agent` is the identity the toolbar's select
+- **P24** Prefs live in `localStorage` under `ab.*` (`ab.theme`, `ab.view`,
+  `ab.density`, `ab.agent`). Never in the board file: prefs are per-browser, the
+  file is shared and committed. `ab.agent` is the identity the toolbar's select
   holds and `c` claims as — two people reading one board must be able to be
   different agents without either editing the file.
 - **P25** UI strings are sentence-case with a period (`"This server is
@@ -148,19 +155,19 @@ not a defect.
 
 These break silently, which is the whole reason they are written down.
 
-- **Artefacts.** The board is tracked now: `.yamlboard/` *is* the coordination
+- **Artefacts.** The board is tracked now: `.agentboard/` *is* the coordination
   data, and a clone that arrived without it cannot tell who holds what. Two
   per-machine artefacts sit inside it — `.lock` and `.tmp-*.yaml` — and both are
   ignored from a `.gitignore` **the store owns**: `init` seeds one inside
-  `.yamlboard/` (`store.IGNORE_BODY`), and this repo additionally carries
-  `**/.yamlboard/.lock` and `**/.yamlboard/.tmp-*.yaml` at its root so a store
+  `.agentboard/` (`store.IGNORE_BODY`), and this repo additionally carries
+  `**/.agentboard/.lock` and `**/.agentboard/.tmp-*.yaml` at its root so a store
   created before that rule, and `examples/demo/`, stay honest without re-running
   `init`. The nested file is what makes the board safe to drop into a repo that
-  has never heard of yamlboard: editing a host repo's root `.gitignore` unasked
+  has never heard of agentboard: editing a host repo's root `.gitignore` unasked
   is not ours to do, and without the rule `git add .` commits a 0-byte lock and
   the Commit button then refuses on its own foreign-file guard. A pattern like
-  `.yamlboard*` untracks the board and the demo silently, and `git check-ignore
-  -v .yamlboard/board.yaml` returning a match is the symptom. Rename an artefact
+  `.agentboard*` untracks the board and the demo silently, and `git check-ignore
+  -v .agentboard/board.yaml` returning a match is the symptom. Rename an artefact
   in `store.py` (`LOCK_NAME`, `TEMP_PREFIX`, `TEMP_SUFFIX`) and you edit
   `IGNORE_BODY`, this repo's root `.gitignore`, this bullet, and the "Private
   boards" note in `docs/store.md` that tells people which lines to copy, in the
@@ -215,7 +222,7 @@ These break silently, which is the whole reason they are written down.
   The README is the short route in; `docs/` is where the durable claims live, so
   anything that has to be re-checked whenever the UI moves belongs there and not
   on the front page.
-- **The demo fixture.** `examples/demo/.yamlboard` *is* the README's quick
+- **The demo fixture.** `examples/demo/.agentboard` *is* the README's quick
   start, so a broken fixture breaks the first thing every reader copies. Read it
   through `store.Store` and `api.summary` rather than pasting invented output,
   and re-run the byte-stability check before committing a schema change: read
@@ -292,7 +299,7 @@ like the rest, because each of them has a second and third copy elsewhere.
   the sibling declares the same `id:` first — otherwise archiving one card
   deletes an unrelated card that merely shares its name.
 - **P44** Identity resolves in exactly one place, `identity.resolve`: `--as`,
-  then `$YAMLBOARD_AGENT`, then the local part of `git config user.email`, and
+  then `$AGENTBOARD_AGENT`, then the local part of `git config user.email`, and
   it must already be in `people`. No CLI verb creates a person — `init` seeds the
   roster with the identity it was named as, and `person.create` from the browser's
   Settings is the only other door. Neither invents a name from a claim, which is
@@ -306,7 +313,7 @@ like the rest, because each of them has a second and third copy elsewhere.
 - **P34** Body: `-` bullets, what *and* why, naming the mechanism. An incidental
   regression gets a `Fixes:` bullet.
 - **P35** `gitops.py` is a convention, not a sandbox. Eight fixed argv lists, no
-  shell, writes scoped to the `.yamlboard/` directory — but a repo you did not
+  shell, writes scoped to the `.agentboard/` directory — but a repo you did not
   write can still steer git, so: `core.fsmonitor=false` on every call (plain
   `git status` executes it), `GIT_OPTIONAL_LOCKS=0` for read-only calls,
   `GIT_CONFIG_NOSYSTEM=1`, and ambient
@@ -323,11 +330,11 @@ like the rest, because each of them has a second and third copy elsewhere.
   config belongs in `config_value`, never in a looser `_env`.
   Repo hooks (`.git/hooks`, `core.hooksPath`) still run on Commit, on purpose: a
   hook you installed is yours, and `--no-verify` would be a surprise. Pointing
-  yamlboard at a directory you do not control is unsupported. A hung git is
+  agentboard at a directory you do not control is unsupported. A hung git is
   stopped with SIGTERM and only then SIGKILL, so a killed commit does not leave
   `.git/index.lock` behind; the one git error we recognise by text is exactly
   that lock, reworded as "another git command is running". Commit stages
-  `.yamlboard/` with a plain `add` (never `--force`, which would commit `.lock`
+  `.agentboard/` with a plain `add` (never `--force`, which would commit `.lock`
   and mid-write scratch), and refuses outright if the index already holds a
   file outside that directory — an agent staging source while a human clicks
   Commit is the quarrel this refuses.

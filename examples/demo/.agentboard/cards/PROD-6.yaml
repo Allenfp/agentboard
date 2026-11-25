@@ -18,7 +18,7 @@ claim:
   at: 2026-11-25T09:40:00
   expires: 2026-11-25T11:40:00
   paths:
-    - src/yamlboard/static/**
+    - src/agentboard/static/**
   note: 2h, this board's lease_ttl; amber at 25% of that span
 archived: false
 created: 2026-11-22T10:00:00

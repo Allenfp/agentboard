@@ -24,17 +24,17 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-APP_JS = REPO / "src" / "yamlboard" / "static" / "app.js"
-STYLES = REPO / "src" / "yamlboard" / "static" / "styles.css"
+APP_JS = REPO / "src" / "agentboard" / "static" / "app.js"
+STYLES = REPO / "src" / "agentboard" / "static" / "styles.css"
 KEYS_DOC = REPO / "docs" / "browser.md"
-SKILL = REPO / "src" / "yamlboard" / "skills" / "yamlboard" / "SKILL.md"
+SKILL = REPO / "src" / "agentboard" / "skills" / "agentboard" / "SKILL.md"
 HARNESS = Path(__file__).resolve().parent / "client_harness.mjs"
 
 
@@ -47,7 +47,8 @@ def run_harness(app: Path = APP_JS) -> dict:
                           capture_output=True, text=True, timeout=60)
     if proc.returncode != 0:
         raise AssertionError(
-            f"the harness failed to run {app.name} (exit {proc.returncode}):\n{proc.stderr[-2000:]}")
+            f"the harness failed to run {app.name} (exit {proc.returncode}):\n"
+            f"{proc.stderr[-2000:]}")
     assert proc.stdout.strip(), "the harness printed nothing"
     return json.loads(proc.stdout)
 
@@ -385,7 +386,7 @@ class TestClientContracts(unittest.TestCase):
         claimable — an agent writing the file *is* the reason for the claim.
         """
         self.assertNotIn("41 files", self.skill)
-        refusal = (REPO / "src" / "yamlboard" / "api.py").read_text(encoding="utf-8")
+        refusal = (REPO / "src" / "agentboard" / "api.py").read_text(encoding="utf-8")
         self.assertIn("it would claim every file", refusal)
         self.assertIn("A bare directory is refused", self.skill)
 

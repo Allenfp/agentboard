@@ -1,4 +1,4 @@
-/* yamlboard -- the whole client.
+/* agentboard -- the whole client.
  *
  * One rule: the browser never decides where a card lands. Every interaction
  * posts an op to /api/apply, and the returned document replaces ours. So drag
@@ -66,9 +66,9 @@ function savePref(key, value) {
 const S = {
   state: null,          // the whole payload: {file, read_only, doc, ready, agents, conflicts, tokens, git}
   boardId: null,
-  view: pref("yb.view", "board", VIEWS),
+  view: pref("ab.view", "board", VIEWS),
   swim: "none",
-  density: pref("yb.density", "compact", DENSITIES.map(([value]) => value)),
+  density: pref("ab.density", "compact", DENSITIES.map(([value]) => value)),
   showArchived: false,
   filters: { q: "", label: "", assignee: "", priority: "" },
   busy: 0,
@@ -423,7 +423,7 @@ const readOnly = () => !!S.state?.read_only;
 /** Paint the theme; ``persist`` is off for the boot guess, which is not a choice. */
 function applyTheme(name, { persist = true } = {}) {
   document.documentElement.dataset.theme = name;
-  if (persist) savePref("yb.theme", name);
+  if (persist) savePref("ab.theme", name);
   if (els.theme) {
     els.theme.textContent = "";
     els.theme.append(icon(name === "dark" ? "sun" : "moon"));
@@ -432,7 +432,7 @@ function applyTheme(name, { persist = true } = {}) {
 }
 
 /** "" while the person never picked a theme, which is the only case worth following. */
-const storedTheme = () => pref("yb.theme", "", THEMES);
+const storedTheme = () => pref("ab.theme", "", THEMES);
 
 /** Follow the OS until the person picks a theme; a stored choice is final. */
 function followSystemTheme() {
@@ -517,7 +517,7 @@ function buildShell() {
     id: "agent-select", class: "agent-picker",
     title: "Who this browser claims cards as — press c on a focused card",
     "aria-label": "Claim cards as (the agent c will use)",
-    onchange: (event) => { S.agent = event.target.value; savePref("yb.agent", S.agent); },
+    onchange: (event) => { S.agent = event.target.value; savePref("ab.agent", S.agent); },
   });
   els.agentWrap = $("label", { class: "agent-wrap" },
     $("span", { class: "agent-key" }, "as"), els.agentSelect);
@@ -543,7 +543,7 @@ function buildShell() {
   els.viewToggle = segmented(
     [["board", "Board"], ["list", "List"]],
     () => S.view,
-    (value) => { S.view = value; savePref("yb.view", value); render(); },
+    (value) => { S.view = value; savePref("ab.view", value); render(); },
     (value) => icon(value === "board" ? "board" : "list"),
   );
 
@@ -558,7 +558,7 @@ function buildShell() {
     $("header", { class: "top" },
       $("div", { class: "brand" },
         $("span", { class: "mark", "aria-hidden": "true" }, icon("board")),
-        $("div", {}, $("h1", {}, "yamlboard"), els.subtitle, els.subtitleTail),
+        $("div", {}, $("h1", {}, "agentboard"), els.subtitle, els.subtitleTail),
       ),
       els.boardSelect,
       els.viewToggle.node,
@@ -762,7 +762,7 @@ function paintClaimed(ids) {
 
 function setDensity(value) {
   S.density = value;
-  savePref("yb.density", value);
+  savePref("ab.density", value);
   if (els.main) els.main.dataset.density = value;
   paintViewButtons();
 }
@@ -814,7 +814,7 @@ function render() {
     els.subtitle.textContent = "no boards";
   }
   // With a dozen tabs open, the board name is what tells them apart.
-  document.title = current ? `${current.title || current.id} · yamlboard` : "yamlboard";
+  document.title = current ? `${current.title || current.id} · agentboard` : "agentboard";
 
   els.file.textContent = S.state.file + (readOnly() ? "  (read-only)" : "");
   paintGit();
@@ -851,7 +851,7 @@ function renderBoard() {
 
   const current = board();
   /* Both empty states are dead ends if they only say "empty". A store from
-     `yamlboard init` has one board and no cards, so without this branch the
+     `agentboard init` has one board and no cards, so without this branch the
      first thing a new person sees is four columns reading "Empty." and no hint
      that a card is one keystroke away or that agents exist at all. */
   if (!current || !allCards(current).length) { main.append(emptyFile(!current)); return; }
@@ -886,9 +886,9 @@ function emptyFile(noBoard) {
   return $("div", { class: "empty" },
     $("h2", {}, noBoard ? "This repo has no board yet" : "This board has no cards yet"),
     $("p", {}, "Two jobs, one directory. Make a card: press ", $("kbd", {}, "n"),
-      " here, or run ", $("code", {}, 'yamlboard create "Ship the report" --as you'),
+      " here, or run ", $("code", {}, 'agentboard create "Ship the report" --as you'),
       " anywhere in the repo."),
-    $("p", {}, "Let agents work beside you: run ", $("code", {}, "yamlboard skill install"),
+    $("p", {}, "Let agents work beside you: run ", $("code", {}, "agentboard skill install"),
       " in the repo, and the next agent that opens it claims a card before it edits a file."),
     note, action);
 }
@@ -1859,7 +1859,7 @@ async function openCard(cardId, focus) {
     buttons.push($("button", {
       class: "danger", title: "Delete this card",
       onclick: async () => {
-        if (!confirm(`Delete ${card.id} “${card.title}”? Its file goes away in .yamlboard/cards/`)) return;
+        if (!confirm(`Delete ${card.id} “${card.title}”? Its file goes away in .agentboard/cards/`)) return;
         await send("card.delete", { id: card.id }, "Delete card");
         closeModal();
       },
@@ -2265,7 +2265,7 @@ function openCommitDialog() {
   openModal("Commit the board", $("div", {},
     field("Commit message", message),
     S.state.git?.changed?.length ? $("p", { class: "note" }, "will stage: " + S.state.git.changed.join(", ")) : null,
-    $("p", { class: "note" }, "Only .yamlboard/ is staged; code an agent is working on is left alone.")),
+    $("p", { class: "note" }, "Only .agentboard/ is staged; code an agent is working on is left alone.")),
     [$("button", { class: "ghost", onclick: closeModal }, "Cancel"),
      $("button", { class: "primary", onclick: sendCommit }, "Commit")]);
 }
@@ -2314,8 +2314,8 @@ document.addEventListener("keydown", (event) => {
   if (key === "/") { event.preventDefault(); els.search?.focus(); }
   else if (key === "n") { event.preventDefault(); openNewCard(columns(board())[0]?.id); }
   else if (key === "a") { S.showArchived = !S.showArchived; render(); }
-  else if (key === "b") { S.view = "board"; savePref("yb.view", "board"); render(); }
-  else if (key === "l") { S.view = "list"; savePref("yb.view", "list"); render(); }
+  else if (key === "b") { S.view = "board"; savePref("ab.view", "board"); render(); }
+  else if (key === "l") { S.view = "list"; savePref("ab.view", "list"); render(); }
   else if (key === "d") {
     const [low, mid, high] = DENSITIES.map(([value]) => value);
     setDensity({ [low]: mid, [mid]: high, [high]: low }[S.density]);
@@ -2480,7 +2480,7 @@ const coordClasses = (card) => [
   card.state === "blocked" ? "blocked" : "",
   // The server's `ready` list, not `state === "ready"`: a finished card has no
   // claim and no open blocker, so the four-word vocabulary still calls it ready,
-  // while the list -- what `yamlboard ready` prints and the ready filter filters
+  // while the list -- what `agentboard ready` prints and the ready filter filters
   // by -- leaves it out. Accenting shipped work as takeable is how an agent gets
   // told to reopen it. Same source as the filter and the repaint, so the three
   // cannot disagree; see the note at visibleCards.
@@ -2602,8 +2602,8 @@ function syncAgent() {
     return;
   }
   els.agentSelect.disabled = readOnly();
-  S.agent = fillSelect(els.agentSelect, names, pref("yb.agent", names[0][0], names.map(([id]) => id)));
-  savePref("yb.agent", S.agent);
+  S.agent = fillSelect(els.agentSelect, names, pref("ab.agent", names[0][0], names.map(([id]) => id)));
+  savePref("ab.agent", S.agent);
 }
 
 /** A refused claim: the server's own lines, whose last one is the next move. */
@@ -2677,7 +2677,7 @@ function coordSection(card) {
         // below have to be rebuilt, or Renew stays offered for a card the newly
         // chosen person does not hold.
         S.agent = event.target.value;
-        savePref("yb.agent", S.agent);
+        savePref("ab.agent", S.agent);
         if (els.agentSelect) els.agentSelect.value = S.agent;
         paint(true);
       },

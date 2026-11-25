@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The behaviour yamlboard ships today: a kanban board that is one YAML file in a git
+The behaviour agentboard ships today: a kanban board that is one YAML file in a git
 repository. The file is the backend and the source of truth; the browser is a view
 on top of it whose saves preserve comments, key order and block scalars. This spec
 records the baseline the agent-coordination rewrite deviates from.
@@ -129,7 +129,7 @@ adds the start of the notes).
 
 ### Requirement: Preferences stay out of the file
 Theme, view and density SHALL be per-browser preferences stored in `localStorage`
-under `yb.*` and SHALL never be written to the board file.
+under `ab.*` and SHALL never be written to the board file.
 
 #### Scenario: Changing the theme writes nothing
 - **WHEN** a person presses `t`

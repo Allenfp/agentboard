@@ -144,7 +144,7 @@ const ctx = vm.createContext({
   navigator: { clipboard: { writeText: async () => {} } },
   fetch: async () => ({ ok: true, status: 200, text: async () => "", json: async () => ({
     state: { doc: { people: [], labels: [], boards: [] }, tokens: {}, ready: [],
-      conflicts: [], agents: {}, file: "/tmp/.yamlboard", read_only: false,
+      conflicts: [], agents: {}, file: "/tmp/.agentboard", read_only: false,
       git: { is_repo: false } } }) }),
   requestAnimationFrame: () => 0,
   /* Inert on purpose: the poll is a self-rescheduling for(;;), so a setTimeout
@@ -282,7 +282,7 @@ const observed = vm.runInContext(`(function () {
   };
   walk(picker);
   r.select = { aria: picker.attrs["aria-label"], value: S.agent, options: opts,
-    stored: localStorage.getItem("yb.agent"), isSelect: picker.tagName === "SELECT" };
+    stored: localStorage.getItem("ab.agent"), isSelect: picker.tagName === "SELECT" };
 
   /* expiry announcements: one per expiry, one again after a renew, never a
      backlog on first load. Driven by the real noteExpiries + real toast(). */
@@ -342,7 +342,7 @@ const observed = vm.runInContext(`(function () {
     pick(select, "grigory");
     const survivors = all(section, "INPUT");
     return { handled: true, afterPick: currentAgent(),
-      stored: localStorage.getItem("yb.agent"),
+      stored: localStorage.getItem("ab.agent"),
       pathsKept: survivors.length === 1 && survivors[0] === typed,
       pathsValue: survivors[0] ? survivors[0].value : null,
       buttons: labels(section) };

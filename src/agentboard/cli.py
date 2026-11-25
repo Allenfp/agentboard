@@ -1,4 +1,4 @@
-"""The verbs an agent actually types: ``yamlboard ready``, ``claim``, ``done``.
+"""The verbs an agent actually types: ``agentboard ready``, ``claim``, ``done``.
 
 Two rules make this usable by something that is not a person:
 
@@ -6,7 +6,7 @@ Two rules make this usable by something that is not a person:
 A script can branch on the difference without parsing prose, and prose is
 exactly what an agent under pressure retries instead of reading.
 
-**A refusal ends in a command.** Every denial's last line is ``next: yamlboard
+**A refusal ends in a command.** Every denial's last line is ``next: agentboard
 ready --as <your name>`` — an actionable command naming the caller's own agent
 id. A terse "denied" is what makes an agent loop, retry the same claim, or reach
 for a ``--force`` that does not exist on purpose.
@@ -40,7 +40,7 @@ from .model import ValidationError
 #: the point: an agent reading a stale skill is worse than an agent reading none.
 VERBS = (
     "init", "serve", "create", "check", "show", "list", "ready", "claim",
-    "renew", "release", "done", "dep", "comment", "conflicts", "migrate", "skill",
+    "renew", "release", "done", "dep", "comment", "conflicts", "skill",
 )
 
 #: Verbs that change files, so the anti-drift test can prove the skill documents
@@ -48,7 +48,7 @@ VERBS = (
 #: never at a server that need not be running.
 MUTATING = frozenset({
     "init", "create", "claim", "renew", "release", "done", "dep", "comment",
-    "conflicts", "migrate",
+    "conflicts",
 })
 
 EXIT_OK = 0
@@ -70,21 +70,21 @@ exit codes:
   141  stdout closed (a pipe ended)
 
 identity:
-  --as NAME, else $YAMLBOARD_AGENT, else the local part of `git config
-  user.email`. The name must already be one of the board's people: yamlboard
+  --as NAME, else $AGENTBOARD_AGENT, else the local part of `git config
+  user.email`. The name must already be one of the board's people: agentboard
   never invents one mid-board, because an assignee nobody recognises surfaces
   weeks later in a git blame. `init` is the exception -- a new board lists
   nobody and could never be claimed from, so it seeds the roster with the
   name it was given. Add the rest in the board's Settings.
 
 examples:
-  yamlboard init --title Web --key WEB
-  export YAMLBOARD_AGENT=grigory
-  yamlboard ready --paths 'src/api/**'
-  yamlboard claim WEB-3 --paths 'src/api/**,tests/test_api.py'
-  yamlboard renew WEB-3
-  yamlboard comment WEB-3 "reverting my cache change, see src/cache/"
-  yamlboard done WEB-3
+  agentboard init --title Web --key WEB
+  export AGENTBOARD_AGENT=grigory
+  agentboard ready --paths 'src/api/**'
+  agentboard claim WEB-3 --paths 'src/api/**,tests/test_api.py'
+  agentboard renew WEB-3
+  agentboard comment WEB-3 "reverting my cache change, see src/cache/"
+  agentboard done WEB-3
 """
 
 
@@ -147,7 +147,7 @@ class Out:
     def close(self) -> None:
         """Flush, swallowing a reader that has already gone away.
 
-        A CLI in a pipeline (``yamlboard list | head``) gets EPIPE on the second
+        A CLI in a pipeline (``agentboard list | head``) gets EPIPE on the second
         write, and the default handler prints "Exception ignored in <stderr>" for
         it. When ``main`` has already handled that EPIPE and closed the stream,
         this flush lands on a file that is shut and raises ``ValueError`` instead
@@ -201,9 +201,9 @@ def _who(args: argparse.Namespace, doc: dict | None) -> str | None:
         # while the message above already names the valid ones. Empty roster is
         # the other case, and no retry fixes that one -- only Settings can.
         known = ", ".join(exc.known)
-        nxt = (f"next: yamlboard <verb> --as {exc.known[0]}   # or one of: {known}"
+        nxt = (f"next: agentboard <verb> --as {exc.known[0]}   # or one of: {known}"
                if exc.known
-               else "next: open Settings > People in `yamlboard serve` to add yourself")
+               else "next: open Settings > People in `agentboard serve` to add yourself")
         raise Usage(str(exc), nxt) from exc
 
 
@@ -284,7 +284,7 @@ def verb_init(args: argparse.Namespace, out: Out) -> int:
     # A board whose `people` list is empty is a board nobody can claim from: the
     # allowlist is the only thing identity is checked against, and nothing else in
     # the CLI creates a person. So the identity this run was named with — `--as`,
-    # else $YAMLBOARD_AGENT, else git's user.email — becomes the first person,
+    # else $AGENTBOARD_AGENT, else git's user.email — becomes the first person,
     # which is also the name the hint below is about to print. Seeding it here is
     # the only point where that is safe: the allowlist is empty, so there is no
     # risk of inventing an identity that overrides a real roster.
@@ -302,12 +302,12 @@ def verb_init(args: argparse.Namespace, out: Out) -> int:
         if who:
             out.fact(f"  people: {who} (you; add the rest in the board's Settings)")
         out.fact("next:")
-        out.fact(f"  yamlboard create \"First card\" --as {who or '<you>'}")
-        out.fact("  yamlboard skill install     # teach agents in this repo the protocol")
+        out.fact(f"  agentboard create \"First card\" --as {who or '<you>'}")
+        out.fact("  agentboard skill install     # teach agents in this repo the protocol")
         if not who:
             out.fact("")
             out.fact("  no identity found: pass --as <name> to name yourself, or open")
-            out.fact("  Settings > People in `yamlboard serve` before claiming anything")
+            out.fact("  Settings > People in `agentboard serve` before claiming anything")
     out.data(ok=True, path=str(board.root), existed=False)
     return EXIT_OK
 
@@ -326,7 +326,7 @@ def verb_serve(args: argparse.Namespace, out: Out) -> int:
         # --json this used to print a bare `{}`, which parses and says nothing.
         message = f"cannot listen on {args.host}:{args.port}: {exc}"
         out.data(ok=False, error=message)
-        raise SystemExit(f"yamlboard: {message}") from exc
+        raise SystemExit(f"agentboard: {message}") from exc
     except RuntimeError as exc:
         # Deliberately a different exit from the one above. This bind was
         # refused by us, not the kernel: the caller asked to expose a writable
@@ -334,9 +334,9 @@ def verb_serve(args: argparse.Namespace, out: Out) -> int:
         # treat it as a bad invocation, not retry a port. And it must not
         # escape as a traceback -- the message already names both fixes, and a
         # stack trace around it reads like a crash in our code.
-        raise Usage(str(exc), "next: yamlboard serve --read-only   # or --allow-public") from exc
+        raise Usage(str(exc), "next: agentboard serve --read-only   # or --allow-public") from exc
     shown = "localhost" if server.is_loopback(args.host) else args.host
-    out.fact(f"yamlboard {__version__} on http://{shown}:{args.port}")
+    out.fact(f"agentboard {__version__} on http://{shown}:{args.port}")
     out.fact(f"  board {app.root}")
     if args.read_only:
         out.fact("  read-only: writes are refused")
@@ -363,7 +363,7 @@ def verb_create(args: argparse.Namespace, out: Out) -> int:
     tx = api.Tx(st)
     # No identity check: creating a card is not claiming it, and a board must be
     # fillable by someone who has not decided who they are yet. `--as` here only
-    # sets the banner, so an unset `$YAMLBOARD_AGENT` must not cost you the card.
+    # sets the banner, so an unset `$AGENTBOARD_AGENT` must not cost you the card.
     agent = getattr(args, "agent", None)
     board_id = args.board or str((model.boards(tx.doc) or [{}])[0].get("id") or "")
     result = _run_op(st, out, agent, "card.create", {
@@ -372,7 +372,7 @@ def verb_create(args: argparse.Namespace, out: Out) -> int:
         "due": args.due, "estimate": args.estimate,
     })
     out.fact(f"created {result['id']}  {args.title}")
-    out.fact(f"  next: yamlboard claim {result['id']} --paths '<glob>'")
+    out.fact(f"  next: agentboard claim {result['id']} --paths '<glob>'")
     out.data(ok=True, id=str(result["id"]), title=args.title)
     return EXIT_OK
 
@@ -422,7 +422,7 @@ def verb_check(args: argparse.Namespace, out: Out) -> int:
         return EXIT_USAGE
     if reports:
         out.fact("")
-        out.fact(f"{len(reports)} conflict(s): yamlboard conflicts --resolve frees "
+        out.fact(f"{len(reports)} conflict(s): agentboard conflicts --resolve frees "
                  "the loser of an overlap and corrects a mismatched card id")
         return EXIT_USAGE        # CI should fail on a board that is lying
     if strays:
@@ -440,7 +440,7 @@ def verb_show(args: argparse.Namespace, out: Out) -> int:
     agent = _who(args, tx.doc) if _identity_present(args) else None
     card = tx.find_card(args.id)
     if card is None:
-        raise Usage(f"no card {args.id!r} in {st.root} (try: yamlboard list)")
+        raise Usage(f"no card {args.id!r} in {st.root} (try: agentboard list)")
     _card(out, tx, card, agent)
     # Ask `claim` what it would do, rather than keeping a second copy of the rule
     # here. The copy drifted: holding a card made this exit 3 with "pick other
@@ -458,12 +458,12 @@ def verb_show(args: argparse.Namespace, out: Out) -> int:
         # lease it already owns as a lease it can win.
         out.fact(f"  already yours until {decision.get('expires')} - renew it, "
                  "do not re-claim it")
-        out.fact(f"  next: yamlboard renew {args.id}"
+        out.fact(f"  next: agentboard renew {args.id}"
                  + (f" --as {agent}" if agent else ""))
         out.data(ok=True, id=args.id, state=state, claimable=False, unchanged=True,
                  expires=decision.get("expires"))
         return EXIT_OK
-    out.fact(f"  next: yamlboard claim {args.id} --paths '<glob>'"
+    out.fact(f"  next: agentboard claim {args.id} --paths '<glob>'"
              + (f" --as {agent}" if agent else ""))
     out.data(ok=True, id=args.id, state=state, claimable=True)
     return EXIT_OK
@@ -518,13 +518,13 @@ def verb_ready(args: argparse.Namespace, out: Out) -> int:
         # "every card is blocked or held" on a board with no cards is a lie, and
         # a board with nothing on it gets `create`, not a pointer at `list`.
         if not tx.all_cards():
-            out.fact("  next: yamlboard create \"First card\"")
+            out.fact("  next: agentboard create \"First card\"")
         elif paths:
             out.fact("  every unclaimed card is either blocked or touches a path "
                      "someone already holds - try without --paths to see why")
-            out.fact("  next: yamlboard conflicts   # who holds what, and for how long")
+            out.fact("  next: agentboard conflicts   # who holds what, and for how long")
         else:
-            out.fact("  next: yamlboard list        # every card, blocked ones included")
+            out.fact("  next: agentboard list        # every card, blocked ones included")
     return EXIT_OK
 
 
@@ -544,7 +544,7 @@ def verb_claim(args: argparse.Namespace, out: Out) -> int:
             out.fact(f"  paths {', '.join(result['paths'])}")
         if result.get("preempted"):
             out.fact(f"  took it from {result['preempted']}, whose lease had expired")
-    out.fact(f"  next: renew before anything long - yamlboard renew {args.id}")
+    out.fact(f"  next: renew before anything long - agentboard renew {args.id}")
     out.data(ok=True, **result)
     return EXIT_OK
 
@@ -658,127 +658,9 @@ def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
         out.fact("no conflicts - no two live claims share a path, and no ids collide.")
         return EXIT_OK
     out.fact("")
-    out.fact("next: yamlboard conflicts --resolve   # frees the loser of an overlap, "
+    out.fact("next: agentboard conflicts --resolve   # frees the loser of an overlap, "
              "and corrects a card whose id disagrees with its filename")
     return EXIT_USAGE     # reported, not acted on: a CI gate should see this
-
-
-def verb_migrate(args: argparse.Namespace, out: Out) -> int:
-    source = Path(args.file).expanduser().resolve()
-    if not source.is_file():
-        raise Usage(f"{source} is not a file")
-    target = store.Store(args.dir or source.parent)
-    if target.exists() and not args.force:
-        raise Usage(f"{target.root} already holds a board - pass --force to add to it")
-    try:
-        raw = store._read_file(source, None)
-    except store.StoreError as exc:
-        raise Usage(str(exc)) from exc
-    plan = _translate(raw.doc, source, target)
-    if args.dry_run:
-        out.fact(f"would write {len(plan['cards'])} card(s) to {target.root}")
-        for line in plan["notes"]:
-            out.fact(f"  {line}")
-        out.data(ok=True, dry_run=True, cards=len(plan["cards"]), notes=plan["notes"])
-        return EXIT_OK
-    fresh = not target.exists()
-    if fresh:
-        target.create(args.title or str(raw.doc.get("title") or "Board"))
-    tx = api.Tx(target)
-    wanted = plan["board"]
-    board = (model.boards(tx.doc)[0] if fresh
-             else model.find_board(tx.doc, wanted["id"])
-             or next((b for b in model.boards(tx.doc)
-                      if str(b.get("key")) == wanted["key"]), None))
-    if board is None:
-        raise Usage(
-            f"{target.root} has no board with the key {wanted['key']!r} to hold "
-            f"{wanted['key']}-N cards; its boards are "
-            f"{', '.join(str(b.get('key')) for b in model.boards(tx.doc)) or '(none)'}. "
-            "Migrate into an empty directory instead: renaming a live board would "
-            "orphan every card already named for the old key"
-        )
-    if fresh:
-        # The key is the id prefix and the id is the filename: a board keyed LEG
-        # cannot own WEB-1, and `write_card` refuses it for exactly that reason.
-        # Renaming is only ever safe on a store we just made.
-        board["id"] = wanted["id"]
-        board["key"] = wanted["key"]
-        board["title"] = wanted["title"]
-    # Everything keyed by id merges the same way, and the reason is the same:
-    # ``--force`` means "add this file's cards to the board that is already
-    # here", not "roll that board back to how the v1 file looked". Replacing
-    # ``columns`` dropped every column the live board had added since - a
-    # reviewer's own column, or a `ready` lane with cards still in it vanished
-    # from the board at exit 0, and only the column *check* noticed, taking the
-    # whole migration down with it when a card happened to live there.
-    # A fresh store is different: there is nothing to preserve, so the migrated
-    # file's own columns and fields replace the defaults `init` wrote.
-    for key in ("people", "labels"):
-        section = api._section(tx, key)
-        have = {str(item.get("id")) for item in section if model.is_map(item)}
-        for item in plan[key]:
-            # onto a fresh store this copies every person across; onto an existing
-            # one a duplicate id would fail validation and lose the whole migration
-            if str(item.get("id")) not in have:
-                section.append(item)
-                have.add(str(item.get("id")))
-    for key in ("columns", "custom_fields"):
-        if fresh:
-            board[key] = plan[key]
-            continue
-        current = board.get(key)
-        if not model.is_list(current):
-            current = board[key] = []
-        have = {str(item.get("id")) for item in current if model.is_map(item)}
-        added = [str(item.get("id")) for item in plan[key]
-                 if str(item.get("id")) not in have]
-        for item in plan[key]:
-            if str(item.get("id")) not in have:
-                current.append(item)          # appended: the live order is theirs
-                have.add(str(item.get("id")))
-        if added:
-            plan["notes"].append(f"kept this board's own {key} and added "
-                                 f"{', '.join(added)} from {source.name}")
-    highest = max([int(str(c["id"]).rsplit("-", 1)[1]) for c in plan["cards"]],
-                  default=0)
-    wanted_next = wanted.get("next_card")
-    board["next_card"] = max(wanted_next if model.is_int(wanted_next) and wanted_next > 0 else 1,
-                             highest + 1)
-    tx.touch()
-    # ``--force`` means "add to a store that already exists", and the people and
-    # label loops above do exactly that: merge, skipping ids already present.
-    # Cards used to clobber instead, so re-running a migration onto a board that
-    # had moved on overwrote same-id cards with their v1 copies at exit 0 -- and
-    # the spec says migrating twice is refused with nothing overwritten. Refusing
-    # before ``flush`` means not one byte moves; a real merge of a *different*
-    # file's cards still goes through, because only clashing ids stop it.
-    # ``all_cards``, not ``cards``: a migrated v1 card marked archived lands in
-    # ``archive/``, where the live-only view cannot see it, and the guard has to
-    # cover the retired ones exactly as much as the live ones.
-    already = {str(c.get("id")) for c in tx.all_cards()}
-    clashes = [str(c.get("id")) for c in plan["cards"] if str(c.get("id")) in already]
-    if clashes:
-        shown = ", ".join(clashes[:5]) + ("..." if len(clashes) > 5 else "")
-        raise Usage(
-            f"{len(clashes)} card(s) in {source.name} already exist in {target.root}"
-            f" ({shown}); nothing was written. This store has probably been migrated"
-            " already -- if the old file really is newer, migrate into an empty"
-            " directory and copy over the cards you want",
-        )
-    for card in plan["cards"]:
-        model.set_field(card, "card", "order",
-                        float(model.ORDER_GAP * (1 + len(tx.card_ids()))))
-        tx.create(card)
-    tx.flush()
-    out.fact(f"migrated {len(plan['cards'])} card(s) from {source}")
-    out.fact(f"  into {target.root}; {source} was left exactly as it was")
-    for line in plan["notes"]:
-        out.fact(f"  {line}")
-    out.fact("")
-    out.fact("the old file is not deleted and is not read again: v2 does not read v1.")
-    out.data(ok=True, cards=len(plan["cards"]), notes=plan["notes"], path=str(target.root))
-    return EXIT_OK
 
 
 def verb_skill(args: argparse.Namespace, out: Out) -> int:
@@ -793,7 +675,7 @@ def verb_skill(args: argparse.Namespace, out: Out) -> int:
 
     here = Path(args.dir or ".").resolve()
     repo = gitops.repo_root(here / "dummy") or here
-    dest = repo / ".agents" / "skills" / "yamlboard" / "SKILL.md"
+    dest = repo / ".agents" / "skills" / "agentboard" / "SKILL.md"
     block = dest.parent / "AGENTS-block.md"
     payload = bundled.read_bytes()
     out.data(ok=True, source=str(bundled), target=str(dest))
@@ -838,10 +720,10 @@ def verb_skill(args: argparse.Namespace, out: Out) -> int:
 AGENTS_BLOCK = """\
 ## Coordination
 
-This repo uses `yamlboard`. Before editing files, check `.yamlboard/`: claim a
-card with `yamlboard claim <ID> --paths '<globs you will touch>'` and release it
+This repo uses `agentboard`. Before editing files, check `.agentboard/`: claim a
+card with `agentboard claim <ID> --paths '<globs you will touch>'` and release it
 when done. Exit code 3 means another agent holds it - take different work, never
-retry. Full protocol: `.agents/skills/yamlboard/SKILL.md`.
+retry. Full protocol: `.agents/skills/agentboard/SKILL.md`.
 """
 
 
@@ -852,7 +734,7 @@ def skill_path() -> Path | None:
     ``uv tool install`` there is no checkout: a path built from ``cwd`` would
     point at whatever repository the caller happened to be standing in.
     """
-    candidate = Path(__file__).resolve().parent / "skills" / "yamlboard" / "SKILL.md"
+    candidate = Path(__file__).resolve().parent / "skills" / "agentboard" / "SKILL.md"
     return candidate if candidate.is_file() else None
 
 
@@ -984,85 +866,17 @@ def _conflict_detail(report: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# v1 -> v2
-# --------------------------------------------------------------------------- #
-
-def _translate(doc: dict, source: Path, target: store.Store) -> dict:
-    """A v1 single-file document as v2 files.
-
-    v2 never reads v1, deliberately: a reader that accepts two shapes is how a
-    board ends up silently ignored - parsed by the wrong branch, looking empty,
-    while somebody's edits sit in the other format. So this runs once, says what
-    it dropped, and leaves the original file alone.
-    """
-    notes: list[str] = []
-    version = doc.get("version", 1)
-    if model.is_int(version) and version >= model.VERSION:
-        raise Usage(f"{source} says version {version}; this reads version 1 boards. "
-                    "If it is already a v2 store, point at its parent directory instead")
-
-    boards = [b for b in (doc.get("boards") or []) if model.is_map(b)]
-    if len(boards) != 1:
-        raise Usage(
-            f"{source} has {len(boards)} boards; migrate writes one store per board, "
-            "so run it once per board (or hand-move the files if you want them together)"
-        )
-    board = boards[0]
-
-    cards: list[dict] = []
-    for index, raw in enumerate(board.get("cards") or []):
-        if not model.is_map(raw):
-            notes.append(f"dropped card #{index}: not a mapping")
-            continue
-        card = {key: value for key, value in raw.items()
-                if key in model.CARD_KEYS}
-        card.pop("cards", None)
-        if not card.get("id"):
-            notes.append(f"dropped card #{index}: no id")
-            continue
-        if not model.CARD_RE.match(str(card["id"])):
-            notes.append(f"dropped {card['id']}: not a KEY-n id, and the id is the filename")
-            continue
-        if "order" not in card:
-            card["order"] = float(model.ORDER_GAP * (index + 1))
-        card["archived"] = bool(card.get("archived"))
-        cards.append(card)
-
-    archived_lanes = {str(c.get("id")) for c in model.columns(board)
-                      if c.get("is_done")}
-    return {
-        "cards": cards,
-        # carried, not merely validated: the caller must build a board whose key
-        # matches the ids of the cards it is about to write
-        "board": {
-            "id": str(board.get("id") or model.slugify(str(board.get("title") or "board"))),
-            "key": str(board.get("key") or model.board_key(str(board.get("title") or "Board"))),
-            "title": str(board.get("title") or "Board"),
-            "next_card": board.get("next_card"),
-        },
-        "people": [dict(p) for p in (doc.get("people") or []) if model.is_map(p)],
-        "labels": [dict(lbl) for lbl in (doc.get("labels") or []) if model.is_map(lbl)],
-        "columns": [model.jsonable(c) for c in model.columns(board)],
-        "custom_fields": [model.jsonable(f) for f in model.custom_fields(board)],
-        "notes": notes + ([
-            f"{len(archived_lanes)} done column(s); v2 keeps done cards in the "
-            "board and uses archive/ only for retired ones"
-        ] if archived_lanes else []),
-    }
-
-
-# --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="yamlboard",
+        prog="agentboard",
         description="A board in your repo that tells concurrent agents who holds what.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"yamlboard {__version__}")
+    parser.add_argument("--version", action="version", version=f"agentboard {__version__}")
     sub = parser.add_subparsers(dest="verb", metavar="<verb>", required=True)
 
     def add(name: str, help_text: str, **kwargs: Any):
@@ -1073,28 +887,30 @@ def build_parser() -> argparse.ArgumentParser:
                              help=default_doc)
         return command
 
-    as_help = "agent to act as (default: $YAMLBOARD_AGENT, then git user.email)"
+    as_help = "agent to act as (default: $AGENTBOARD_AGENT, then git user.email)"
 
-    init = store_dir(add("init", "create .yamlboard/ in this repository"),
+    init = store_dir(add("init", "create .agentboard/ in this repository"),
                      "where to create the board (default: here)")
     init.add_argument("--title", help="board title (default: Board)")
     init.add_argument("--key", help="card id prefix, 2-8 characters like WEB")
     init.add_argument("--as", dest="agent", help=as_help)
     init.add_argument("--json", action="store_true", help="one JSON document on stdout")
-    init.add_argument("--force", action="store_true", help="accepted and ignored; init never overwrites")
+    init.add_argument("--force", action="store_true",
+                      help="accepted and ignored; init never overwrites")
 
     serve = store_dir(add("serve", "show the board in a browser"),
-                      "directory containing .yamlboard/ (default: search upwards)")
+                      "directory containing .agentboard/ (default: search upwards)")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=7474)
     serve.add_argument("--read-only", action="store_true", help="refuse every write")
     serve.add_argument("--allow-public", action="store_true",
                        help="let a non-loopback bind serve a writable board (no auth)")
-    serve.add_argument("--no-git", action="store_true", help="skip git status and the Commit button")
+    serve.add_argument("--no-git", action="store_true",
+                       help="skip git status and the Commit button")
     serve.add_argument("-v", "--verbose", action="store_true", help="log each request")
     serve.add_argument("--json", action="store_true", help="print the startup line as JSON")
 
-    create = store_dir(add("create", "add a card"), "directory containing .yamlboard/")
+    create = store_dir(add("create", "add a card"), "directory containing .agentboard/")
     create.add_argument("title")
     create.add_argument("--board", help="board id (default: the first board)")
     create.add_argument("--column", help="column id (default: the board's first column)")
@@ -1107,7 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--json", action="store_true")
 
     check = store_dir(add("check", "validate the board and report conflicts"),
-                      "directory containing .yamlboard/")
+                      "directory containing .agentboard/")
     # Named, `check` stops reporting your own claimed work back to you as a
     # collision. Unnamed — CI, a stranger — it still reports every live claim,
     # because a gate has nobody's identity to ask with.
@@ -1115,7 +931,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--json", action="store_true")
 
     show = store_dir(add("show", "can I take this card, and if not why"),
-                     "directory containing .yamlboard/")
+                     "directory containing .agentboard/")
     show.add_argument("id")
     # `dest="agent"` everywhere: `as` is a keyword, and one attribute name for
     # the same concept across fifteen verbs is what lets `_who` read it back.
@@ -1124,20 +940,20 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--json", action="store_true")
 
     listing = store_dir(add("list", "every card, in board order"),
-                        "directory containing .yamlboard/")
+                        "directory containing .agentboard/")
     listing.add_argument("--board", help="one board only")
     listing.add_argument("--all", action="store_true", help="include archived cards")
     listing.add_argument("--as", dest="agent", help=as_help)
     listing.add_argument("--json", action="store_true")
 
     ready = store_dir(add("ready", "cards you can start right now"),
-                      "directory containing .yamlboard/")
+                      "directory containing .agentboard/")
     ready.add_argument("--paths", help="only cards whose claim would not collide with these")
     ready.add_argument("--as", dest="agent", help=as_help)
     ready.add_argument("--json", action="store_true")
 
     claim = store_dir(add("claim", "take a card for a bounded time"),
-                      "directory containing .yamlboard/")
+                      "directory containing .agentboard/")
     claim.add_argument("id")
     claim.add_argument("--paths", help="files or globs you will edit: 'src/api/**,tests/x.py'")
     claim.add_argument("--ttl", help="lease length like 30m or 2h (default: the board's)")
@@ -1145,13 +961,13 @@ def build_parser() -> argparse.ArgumentParser:
     claim.add_argument("--as", dest="agent", help=as_help)
     claim.add_argument("--json", action="store_true")
 
-    renew = store_dir(add("renew", "extend your lease"), "directory containing .yamlboard/")
+    renew = store_dir(add("renew", "extend your lease"), "directory containing .agentboard/")
     renew.add_argument("id")
     renew.add_argument("--ttl", help="new length from now, like 30m")
     renew.add_argument("--as", dest="agent", help=as_help)
     renew.add_argument("--json", action="store_true")
 
-    release = store_dir(add("release", "put a card back"), "directory containing .yamlboard/")
+    release = store_dir(add("release", "put a card back"), "directory containing .agentboard/")
     release.add_argument("id")
     release.add_argument("--force", action="store_true",
                          help="release a live claim held by someone else")
@@ -1159,14 +975,14 @@ def build_parser() -> argparse.ArgumentParser:
     release.add_argument("--json", action="store_true")
 
     done = store_dir(add("done", "finish a card and free its lease"),
-                     "directory containing .yamlboard/")
+                     "directory containing .agentboard/")
     done.add_argument("id")
     done.add_argument("--column", help="a done column other than the board's default")
     done.add_argument("--as", dest="agent", help=as_help)
     done.add_argument("--json", action="store_true")
 
     dep = store_dir(add("dep", "add or remove a blocked_by edge"),
-                    "directory containing .yamlboard/")
+                    "directory containing .agentboard/")
     dep.add_argument("action", choices=("add", "rm", "remove"))
     dep.add_argument("id", help="the card that will wait")
     # The blocker is a flag, not a second positional: `dep add WEB-1 WEB-2` does
@@ -1178,26 +994,18 @@ def build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--json", action="store_true")
 
     comment = store_dir(add("comment", "leave a note on a card for whoever reads it next"),
-                        "directory containing .yamlboard/")
+                        "directory containing .agentboard/")
     comment.add_argument("id")
     comment.add_argument("text", help="the note, quoted; it is read by a human or another agent")
     comment.add_argument("--as", dest="agent", help=as_help)
     comment.add_argument("--json", action="store_true")
 
     conflicts = store_dir(add("conflicts", "report overlaps git could not see"),
-                          "directory containing .yamlboard/")
+                          "directory containing .agentboard/")
     conflicts.add_argument("--resolve", action="store_true",
                            help="mark every loser overridden, freeing its card")
     conflicts.add_argument("--as", dest="agent", help=as_help)
     conflicts.add_argument("--json", action="store_true")
-
-    migrate = add("migrate", "import a v1 single-file board into a v2 store")
-    migrate.add_argument("file", help="the old boards.yaml")
-    migrate.add_argument("--dir", help="where to write .yamlboard/ (default: beside the file)")
-    migrate.add_argument("--title", help="board title for the new store")
-    migrate.add_argument("--dry-run", action="store_true", help="report, write nothing")
-    migrate.add_argument("--force", action="store_true", help="add to an existing store")
-    migrate.add_argument("--json", action="store_true")
 
     skill = add("skill", "install or locate the agent skill file")
     skill.add_argument("action", choices=("install", "path"))
@@ -1223,7 +1031,6 @@ VERB_FUNCTIONS: dict[str, Callable[[argparse.Namespace, Out], int]] = {
     "dep": verb_dep,
     "comment": verb_comment,
     "conflicts": verb_conflicts,
-    "migrate": verb_migrate,
     "skill": verb_skill,
 }
 
@@ -1274,14 +1081,14 @@ def main(argv: list[str] | None = None) -> int:
     except (ValidationError, store.StoreError, api.BadRequest, api.NotFound) as exc:
         # A store that will not parse is a usage failure, not a crash. The read
         # verbs (`check`, `show`, `list`, `ready`, `conflicts`) build their `Tx`
-        # outside `_run_op`, so a bad `board.yaml` — a version 1 file, a stray
-        # top-level key, one card whose prefix no board owns — escaped here as a
-        # Python traceback printed *under* the message that tells you to run
-        # `yamlboard migrate`. Worse, it exited 1, which this tool reserves for
+        # outside `_run_op`, so a bad `board.yaml` — a file written by another
+        # version, a stray top-level key, one card whose prefix no board owns —
+        # escaped here as a Python traceback printed *under* the message that
+        # explains the refusal. Worse, it exited 1, which this tool reserves for
         # "the port is taken": an agent scripted on the codes went looking for a
         # running server instead of reading its own files.
-        code = _fail(out, list(getattr(exc, "errors", None)) or [str(exc)],
-                     prefix="")
+        errors = getattr(exc, "errors", None)
+        code = _fail(out, list(errors) if errors else [str(exc)], prefix="")
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         code = EXIT_INTERRUPT

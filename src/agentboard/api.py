@@ -198,10 +198,9 @@ class Tx:
                 if model.board_for_card(self.doc, str(card.get("id") or "")) is not board:
                     continue
                 errors.extend(model.validate_card(card, board, ctx))
-            cycle = model.find_cycle(
-                model.dependencies([c for c in self.all_cards()
-                                   if model.board_for_card(self.doc, str(c.get("id") or "")) is board])
-            )
+            mine = [c for c in self.all_cards()
+                    if model.board_for_card(self.doc, str(c.get("id") or "")) is board]
+            cycle = model.find_cycle(model.dependencies(mine))
             if cycle:
                 errors.append(f"board {board.get('id')}: blocked_by cycle "
                               + " -> ".join(cycle))
@@ -277,10 +276,10 @@ class Tx:
             # one clone mint the same one — the second overwrites the first at
             # exit 0 and a card is gone with nothing to show it was ever there.
             # Nothing legitimate can already be on disk at this point:
-            # `next_card_id` skips every id the caller listed, and `migrate`
-            # refuses an id clash before it writes. A name found here arrived
-            # after this transaction opened, which is the same fact a stale
-            # token states, so it gets the same answer.
+            # `next_card_id` skips every id the caller listed, and `create`
+            # refuses an id that is not the one the board's counter points at.
+            # A name found here arrived after this transaction opened, which is
+            # the same fact a stale token states, so it gets the same answer.
             jumped = [card_id for card_id in sorted(self._extra)
                       if card_id not in self._removed
                       and self.store.card_path(
@@ -416,12 +415,12 @@ def _person_arg(tx: Tx, args: dict, name: str = "assignee") -> str:
     """An agent name the caller may use: must be text and one of the people.
 
     Claiming as an unknown name is a denial, not a bad request — an agent with a
-    stale ``$YAMLBOARD_AGENT`` is in the same position as one that lost a race:
+    stale ``$AGENTBOARD_AGENT`` is in the same position as one that lost a race:
     it should stop and fix its identity rather than assume the payload was wrong.
     """
     value = args.get(name)
     if not model.is_str(value) or not value.strip():
-        raise ClaimDenied([f"{name} is required: pass --as <name> or set YAMLBOARD_AGENT"],
+        raise ClaimDenied([f"{name} is required: pass --as <name> or set AGENTBOARD_AGENT"],
                           {"reason": "no_agent"})
     ident = value.strip()
     known = sorted(_people(tx))
@@ -980,7 +979,7 @@ def take_decision(tx: Tx, card: dict, agent: str | None,
         raise ClaimDenied(
             [f"{card_id} is finished work — it sits in {column!r}, a done column",
              f"if it is not finished after all, move it out first: "
-             f"yamlboard done {card_id} --column <where it belongs>",
+             f"agentboard done {card_id} --column <where it belongs>",
              _next(tx, agent)],
             {"reason": "finished", "card": card_id, "column": column},
         )
@@ -1003,7 +1002,7 @@ def take_decision(tx: Tx, card: dict, agent: str | None,
         # a footprint is a promise the board was already navigated against. The
         # defect was the *shape* of the refusal, which was indistinguishable from
         # losing the card to a stranger — exit 3 with ``reason: "taken"`` and
-        # ``next: yamlboard ready``, under a first line reading "WEB-1 is already
+        # ``next: agentboard ready``, under a first line reading "WEB-1 is already
         # yours". A caller scripted on ``reason`` walked away from a card it was
         # mid-edit on. Still exit 3, because the card is not takeable either way;
         # a different reason and a different next step, because what to do is not
@@ -1019,7 +1018,7 @@ def take_decision(tx: Tx, card: dict, agent: str | None,
                         f"but not for {', '.join(asked)}")
             lines.append("growing a claim you already hold is not yours alone to "
                          "do — the board was navigated against the first footprint")
-            lines.append(f"next: yamlboard renew {card_id} --as {agent}"
+            lines.append(f"next: agentboard renew {card_id} --as {agent}"
                          "   # the same paths, longer")
             raise ClaimDenied(lines,
                               {"reason": "widens", "holder": agent,
@@ -1084,7 +1083,7 @@ def _covers(held: Any, wanted: list[str]) -> bool:
 
 
 def _next(tx: Tx, agent: str | None) -> str:
-    return f"next: yamlboard ready --as {agent}" if agent else "next: yamlboard ready"
+    return f"next: agentboard ready --as {agent}" if agent else "next: agentboard ready"
 
 
 def claim_renew(tx: Tx, args: dict) -> dict:
@@ -1113,8 +1112,8 @@ def claim_renew(tx: Tx, args: dict) -> dict:
         raise ClaimDenied(
             [f"{card_id} was resolved against you — {claim['overridden_by']} won "
              f"that overlap, so this claim is spent",
-             f"next: yamlboard ready --as {agent}" if agent
-             else "next: yamlboard ready"],
+             f"next: agentboard ready --as {agent}" if agent
+             else "next: agentboard ready"],
             {"reason": "overridden", "winner": claim["overridden_by"]},
         )
     board = _board_of(tx, card_id)
@@ -1465,8 +1464,9 @@ def card_move(tx: Tx, args: dict) -> dict:
     cross = target is not source
     if cross:
         target_key = str(target.get("key"))
-        if any(str(c.get("id")) == f"{target_key}-{card_id.split('-')[-1]}" for c in tx.all_cards()):
-            raise BadRequest(f"{target_key}-{card_id.split('-')[-1]} already exists")
+        wanted = f"{target_key}-{card_id.split('-')[-1]}"
+        if any(str(c.get("id")) == wanted for c in tx.all_cards()):
+            raise BadRequest(f"{wanted} already exists")
 
     # Already sorted by `tx.cards()`; the moved card is excluded so the gap is
     # computed against the column as it will read afterwards.
@@ -1901,7 +1901,8 @@ def board_create(tx: Tx, args: dict) -> dict:
 
     columns = args.get("columns")
     if columns is None:
-        column_specs = [{"id": cid, "name": name} for cid, name in DEFAULT_COLUMNS]
+        column_specs: list[dict[str, Any]] = [
+            {"id": cid, "name": name} for cid, name in DEFAULT_COLUMNS]
         column_specs[-1]["is_done"] = True
     else:
         if not model.is_list(columns) or not columns:
@@ -1936,6 +1937,7 @@ def board_create(tx: Tx, args: dict) -> dict:
 
 def board_update(tx: Tx, args: dict) -> dict:
     board = _board(tx, args)
+    old = str(board.get("key"))
     if "title" in args and str(args["title"]).strip():
         board["title"] = str(args["title"]).strip()
     if "lease_ttl" in args:
@@ -1962,7 +1964,6 @@ def board_update(tx: Tx, args: dict) -> dict:
                 f"holds {len(mine)} card(s) — each id is its filename, so renaming "
                 "means renaming every file and rewriting every blocked_by edge"
             )
-        old = str(board.get("key"))
         board["key"] = key
         highest = _max_number(board, mine)
         current = board.get("next_card")
@@ -2276,12 +2277,12 @@ def summary(tx: Tx, *, dirty: list[str] | None = None,
         entry = model.jsonable(card)
         entry["state"] = state_of(tx, card, agent)
         claim = model.claim_of(card)
-        live = bool(claim and model.claim_live(claim))
+        live = claim is not None and model.claim_live(claim)
         entry["live"] = live
         entry["overlaps"] = card_id in overlapping
         entry["open_blockers"] = model.blocked_by_open(edges, card_id, done)
         entry["archived"] = tx.is_archived(card_id) or bool(card.get("archived"))
-        if live:
+        if live and claim is not None:
             entry["claim"] = dict(entry.get("claim") or {})
             entry["claim"]["left"] = model.ttl_left(claim)
             entry["claim"]["span"] = model.claim_span(claim)

@@ -2,21 +2,21 @@
 
 Two clones, two card files, two paths. Each claims `src/api/**`, git merges the
 two files without a single complaint, and both agents believe they hold the same
-directory. Git has no arbiter and neither does yamlboard — there is no server in
+directory. Git has no arbiter and neither does agentboard — there is no server in
 the loop to become one. So this is detect-and-resolve with a deterministic winner,
 surfaced to a human.
 
 ## Reporting
 
 ```console
-$ yamlboard conflicts
+$ agentboard conflicts
 overlap: PROD-2 (ada) and PROD-3 (grigory) claim the same files
   src/api/** ∩ src/api/routes.py
   winner ada on PROD-2 (claimed 2026-11-25T09:00:00)
   loser  grigory on PROD-3 (claimed 2026-11-25T09:30:00)
   earliest `at` wins; a tie goes to the alphabetically first name
 
-next: yamlboard conflicts --resolve   # frees the loser of an overlap, and corrects a card whose id disagrees with its filename
+next: agentboard conflicts --resolve   # frees the loser of an overlap, and corrects a card whose id disagrees with its filename
 ```
 
 Reporting writes nothing, so two clones asking independently get the same answer
@@ -44,12 +44,12 @@ claim — which makes that claim inert, so the card is back in `ready` on the ne
 read:
 
 ```console
-$ yamlboard conflicts --resolve --as ada
+$ agentboard conflicts --resolve --as ada
   as ada
 PROD-3: grigory overridden by ada
 1 claim(s) released; those cards are ready again
 
-$ yamlboard conflicts
+$ agentboard conflicts
 no conflicts - no two live claims share a path, and no ids collide.
 ```
 
@@ -58,7 +58,7 @@ file itself is never moved. When two files want the same name it says so and
 leaves both alone rather than picking a survivor — losing a card to make the
 counts line up is not a repair.
 
-`--resolve` demands an identity (`--as`, or `$YAMLBOARD_AGENT`): it is the one
+`--resolve` demands an identity (`--as`, or `$AGENTBOARD_AGENT`): it is the one
 operation that overrides another agent's claim, and the audit trail has to name
 who did it. It is also asked of the *store*, not of the caller's filtered view —
 gating it on what one agent can see would let it report "nothing to resolve"
@@ -79,10 +79,10 @@ loser.
 
 ```bash
 git clone . clone-a && git clone . clone-b
-(cd clone-a && yamlboard claim WEB-1 --as ada     --paths 'src/**')
-(cd clone-b && yamlboard claim WEB-2 --as grigory --paths 'src/api/**')
+(cd clone-a && agentboard claim WEB-1 --as ada     --paths 'src/**')
+(cd clone-b && agentboard claim WEB-2 --as grigory --paths 'src/api/**')
 (cd clone-a && git add -A && git commit -qm 'ada claims')
-(cd clone-b && git pull --ff-only && yamlboard conflicts)   # ada wins, earlier `at`
+(cd clone-b && git pull --ff-only && agentboard conflicts)   # ada wins, earlier `at`
 ```
 
 Git merges the two card files with **zero** textual conflicts. That is exactly the

@@ -1,4 +1,0 @@
-# yamlboard runtime scratch — written by yamlboard, never board state.
-# The directory itself is tracked: it IS the board.
-.lock
-.tmp-*.yaml

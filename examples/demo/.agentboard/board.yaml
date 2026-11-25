@@ -1,13 +1,13 @@
-# yamlboard demo store. Copy it into a repo to see the whole thing working:
+# agentboard demo store. Copy it into a repo to see the whole thing working:
 
-#     cp -r examples/demo/.yamlboard ./ && yamlboard serve
+#     cp -r examples/demo/.agentboard ./ && agentboard serve
 
 # There are no cards in this file. A card is a file in cards/, which is what makes an
 # unrelated card an unrelated path, and what let the global `rev` counter go.
 
 # Three cards carry hand-written claims so a fresh clone has something to look at,
 # and two of those claims overlap on purpose: PROD-2 holds `src/api/**`, PROD-3
-# holds `src/api/routes.py` inside it. That pair is what `yamlboard conflicts` reports.
+# holds `src/api/routes.py` inside it. That pair is what `agentboard conflicts` reports.
 
 # Those timestamps were stamped when this fixture was committed, and a lease that
 # never lapsed would be a bug - the longest here is 24h, the ceiling the CLI writes.

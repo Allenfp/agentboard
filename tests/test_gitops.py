@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from yamlboard import gitops
+from agentboard import gitops
 
 STARTER = """\
 version: 1
@@ -229,7 +229,7 @@ class TestCommitScoping(GitRepo):
         gitops.commit(self.file, gitops.default_message(self.file, "ship   the  release"))
 
         self.assertEqual(git(self.repo, "log", "-1", "--format=%s"),
-                         "yamlboard: ship the release")
+                         "agentboard: ship the release")
 
     def test_a_global_only_identity_is_not_forged_into_the_author(self) -> None:
         """A repo with no local user.email commits as the user, not as hostname.
@@ -244,7 +244,7 @@ class TestCommitScoping(GitRepo):
         fresh = self.dir / "global-only"
         fresh.mkdir()
         git(fresh, "init", "-q", "-b", "main")
-        board_dir = fresh / ".yamlboard"
+        board_dir = fresh / ".agentboard"
         board_dir.mkdir()
         (board_dir / "boards.yaml").write_text(STARTER, encoding="utf-8")
         # Seed with an inline identity so HEAD exists without leaving repo config.

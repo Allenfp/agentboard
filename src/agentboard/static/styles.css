@@ -1,4 +1,4 @@
-/* yamlboard -- theme tokens first, layout after. No frameworks, no fonts to fetch.
+/* agentboard -- theme tokens first, layout after. No frameworks, no fonts to fetch.
  *
  * Density (minimal | compact | full) is a display setting on <main data-density>;
  * card tiles always render every part and CSS decides what shows, so switching
