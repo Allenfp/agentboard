@@ -119,7 +119,13 @@ class Board(unittest.TestCase):
         (self.repo / ".gitignore").write_text(
             ".yamlboard/.lock\n.yamlboard/.tmp-*\n", encoding="utf-8")
         git(self.repo, "add", "-A")
-        git(self.repo, "commit", "-qm", "seed")
+        # Identity for this one commit, passed inline rather than with
+        # `git config`: several tests below assert the board resolves *no*
+        # identity at all, so a repo-local `user.email` here would break them.
+        # macOS git invents an ident from hostname+username when none is set;
+        # Linux git refuses and exits 128, which is why this only failed in CI.
+        git(self.repo, "-c", "user.name=Test", "-c", "user.email=t@example.com",
+            "commit", "-qm", "seed")
 
         # Agents work inside the checkout they coordinate, and both of the CLI's
         # defaults hang off the process cwd: `Store.discover` searches upwards
@@ -976,7 +982,8 @@ class TestInitSeedsAnIdentity(Board):
         root = Path(self._tmp.name) / "anonymous"
         root.mkdir()
         git(root, "init", "-q", "-b", "main")
-        git(root, "commit", "-q", "--allow-empty", "-m", "seed")
+        git(root, "-c", "user.name=Test", "-c", "user.email=t@example.com",
+            "commit", "-q", "--allow-empty", "-m", "seed")
         code, out, err = self.yb("init", "--dir", str(root))
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertEqual(store.Store(root).read_board().doc["people"], [])
@@ -1829,7 +1836,8 @@ class TestRealProcess(Board):
         """
         self.assertEqual(self.proc("create", "A card").returncode, cli.EXIT_OK)
         git(self.repo, "add", "-A")
-        git(self.repo, "commit", "-qm", "board")
+        git(self.repo, "-c", "user.name=Test", "-c", "user.email=t@example.com",
+            "commit", "-qm", "board")
 
         self.assertEqual(self.proc("claim", "WEB-1", "--as", "ada",
                                    "--paths", "src/api/**").returncode, cli.EXIT_OK)

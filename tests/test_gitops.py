@@ -94,6 +94,13 @@ class GitRepo(unittest.TestCase):
         other = self.dir / name
         other.mkdir()
         git(other, "init", "-q", "-b", "other-branch")
+        # Identity, as in setUp: callers commit into this repo, and git without
+        # a configured identity works on macOS (it guesses from hostname) but
+        # exits 128 on the CI runner -- a decoy that cannot be committed to is
+        # not a decoy.
+        git(other, "config", "user.email", "t@example.com")
+        git(other, "config", "user.name", "Test")
+        git(other, "config", "commit.gpgsign", "false")
         return other
 
 
