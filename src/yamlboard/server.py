@@ -370,8 +370,8 @@ class Handler(BaseHTTPRequestHandler):
         rewrite the file and drive the Commit button (CSRF, proven end to end).
         Browsers always set Host and (for cross-origin) Origin/Referer; a
         non-browser client that omits them all is on the machine already.
-        ``make_server`` leaves ``allowed_hosts`` None for public/README binds,
-        which have their own documented tradeoff.
+        ``make_server`` leaves ``allowed_hosts`` None for the public binds
+        ``docs/browser.md`` documents, which have their own documented tradeoff.
         """
         if self.allowed_hosts is None:
             return True

@@ -33,7 +33,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 APP_JS = REPO / "src" / "yamlboard" / "static" / "app.js"
 STYLES = REPO / "src" / "yamlboard" / "static" / "styles.css"
-README = REPO / "README.md"
+KEYS_DOC = REPO / "docs" / "browser.md"
 SKILL = REPO / "src" / "yamlboard" / "skills" / "yamlboard" / "SKILL.md"
 HARNESS = Path(__file__).resolve().parent / "client_harness.mjs"
 
@@ -300,13 +300,18 @@ class TestClientContracts(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.js = APP_JS.read_text(encoding="utf-8")
         cls.css = STYLES.read_text(encoding="utf-8")
-        cls.readme = README.read_text(encoding="utf-8")
+        cls.keys = KEYS_DOC.read_text(encoding="utf-8")
         cls.skill = SKILL.read_text(encoding="utf-8")
 
-    def test_every_shortcut_exists_in_the_handler_the_help_panel_and_the_readme(self) -> None:
+    def test_every_shortcut_exists_in_the_handler_the_help_panel_and_the_docs(self) -> None:
         """One list in three formats, edited by hand. A key in the handler and
-        not in the panel is invisible; in the README and not the handler is a
-        line that teaches a lie.
+        not in the panel is invisible; in the docs and not the handler is a line
+        that teaches a lie.
+
+        The third copy is `docs/browser.md`, not the README: the README's job is
+        to get a reader to the six commands and send them somewhere, so it links
+        to the keyboard list instead of carrying a duplicate that nothing would
+        keep honest.
         """
         handler = set(re.findall(r'key === "([a-z/?])"', self.js))
 
@@ -321,13 +326,14 @@ class TestClientContracts(unittest.TestCase):
                 if len(token) == 1:
                     panel.add(token)
 
-        readme_line = self.readme[self.readme.index("`n` new card"):]
-        readme_line = readme_line[:readme_line.index("shortcuts · `Esc`")]
-        readme = set(re.findall(r"`([a-z/?])`", readme_line))
+        keys_line = self.keys[self.keys.index("`n` new card"):]
+        keys_line = keys_line[:keys_line.index("shortcuts · `Esc`")]
+        documented = set(re.findall(r"`([a-z/?])`", keys_line))
         for key in ("n", "/", "a", "b", "l", "d", "f", "s", "t", "?", "r", "c"):
             self.assertIn(key, handler, f"{key} is documented but not handled")
             self.assertIn(key, panel, f"{key} is handled but not in the help panel")
-            self.assertIn(key, readme, f"{key} is handled but missing from the README")
+            self.assertIn(key, documented,
+                          f"{key} is handled but missing from docs/browser.md")
 
     def test_the_coordination_state_is_a_class_and_not_a_data_attribute(self) -> None:
         for name in ("claimed", "overlaps", "blocked", "ready-look"):

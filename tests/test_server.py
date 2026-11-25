@@ -42,7 +42,7 @@ from yamlboard import __version__, api, gitops, model, store
 from yamlboard.server import (INTERNAL_ERROR, Application, is_loopback, local_hosts,
                              make_server, resolve_static)
 
-#: The two per-machine artefacts a real repo ignores (README, "Private boards").
+#: The two per-machine artefacts a real repo ignores (docs/store.md, "Private boards").
 #: Without them the Commit button stages the advisory flock, and every other
 #: clone conflicts with a file that means nothing.
 GITIGNORE = "**/.yamlboard/.lock\n**/.yamlboard/.tmp-*.yaml\n"

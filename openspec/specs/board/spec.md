@@ -139,8 +139,8 @@ under `yb.*` and SHALL never be written to the board file.
 The UI SHALL be operable from the keyboard: `n` new card, `/` search, `a` archive,
 `b`/`l` board/list, `d` density, `f` filters, `s` settings, `t` theme, `r` the
 ready filter, `c` claim the focused card as the browser's chosen agent, `?` for the
-full list. The key handler, the in-app shortcut list and the README's shortcut table
-SHALL always agree.
+full list. The key handler, the in-app shortcut list and the keyboard line in
+`docs/browser.md` SHALL always agree.
 
 #### Scenario: The documented list is the real list
 - **WHEN** a shortcut is added or removed

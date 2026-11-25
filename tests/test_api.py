@@ -2007,12 +2007,15 @@ class TestAntiDrift(unittest.TestCase):
         name = re.search(r"^name:\s*(\S+)", front, re.MULTILINE)
         self.assertEqual(name and name.group(1), "yamlboard")
 
-    def test_the_skills_exit_table_matches_the_clis_own_promises(self) -> None:
+    def test_the_exit_table_is_the_same_list_in_all_four_places(self) -> None:
         """Exit 3 is the one value an agent branches on without reading prose.
 
         If the skill's table and ``--help`` disagree on which code means "someone
         else holds it", a script retries a claim it should abandon — the failure
-        the separate code exists to prevent.
+        the separate code exists to prevent. ``docs/cli.md`` joined as the fourth
+        copy when the README's detail moved out of it, so the two prose tables are
+        compared to each other as well as to the epilog — agreeing on which
+        numbers exist is not enough once a reader may consult either one.
         """
         constants = {
             "EXIT_OK": 0, "EXIT_CANNOT_LISTEN": 1, "EXIT_USAGE": 2,
@@ -2023,13 +2026,22 @@ class TestAntiDrift(unittest.TestCase):
 
         epilog = {int(m.group(1)): m.group(2).strip()
                   for m in re.finditer(r"^ {2}(\d+)\s+(.+)$", cli.EPILOG, re.MULTILINE)}
-        skill = {int(m.group(1)): m.group(2).strip()
-                 for m in re.finditer(r"^\|(\d+)\|(.+)\|$", self.bundled_skill(),
-                                      re.MULTILINE)}
+        def table(text: str) -> dict[int, str]:
+            return {int(m.group(1)): m.group(2).strip()
+                    for m in re.finditer(r"^\|(\d+)\|(.+)\|$", text, re.MULTILINE)}
+
+        skill = table(self.bundled_skill())
+        docs = table((Path(__file__).resolve().parents[1] / "docs" / "cli.md")
+                     .read_text(encoding="utf-8"))
         self.assertEqual(set(epilog), {0, 1, 2, 3, 130, 141}, epilog)
         self.assertEqual(set(skill), set(epilog),
                          "the skill's exit table and --help disagree")
         self.assertEqual(set(skill), set(constants.values()))
+        # The two prose tables a human may consult are one list, not two that
+        # happen to overlap: a reader who meets "refused op" in one and
+        # "refused operation" in the other stops trusting both.
+        self.assertEqual(docs, skill,
+                         "docs/cli.md and SKILL.md spell the same table differently")
 
         def plain(text: str) -> str:
             return re.sub(r"[*_`]", "", text).lower()

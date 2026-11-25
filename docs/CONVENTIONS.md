@@ -2,11 +2,11 @@
 
 Not a style guide for its own sake. Half of these rules exist because two or
 three files have to agree and nothing in the code enforces that they do — the
-client's shortcut list, the in-app help table and the README's shortcut line; the
-exit-code table in `cli.py`, the README and `SKILL.md`; the artefact names in
-`store.py` and the two lines in `.gitignore`; the enum in `model.py` and the
-dropdown in `app.js`. When you change one side, this is the list of the other
-sides.
+client's shortcut list, the in-app help table and the keyboard line in
+`docs/browser.md`; the exit-code table in `cli.py`, `docs/cli.md` and `SKILL.md`;
+the artefact names in `store.py` and the two lines in `.gitignore`; the enum in
+`model.py` and the dropdown in `app.js`. When you change one side, this is the
+list of the other sides.
 
 A review finding that cites a rule here names the rule id (`P17`) and the
 precedent it violates. A finding that invents a new rule is a design proposal,
@@ -162,9 +162,10 @@ These break silently, which is the whole reason they are written down.
   `.yamlboard*` untracks the board and the demo silently, and `git check-ignore
   -v .yamlboard/board.yaml` returning a match is the symptom. Rename an artefact
   in `store.py` (`LOCK_NAME`, `TEMP_PREFIX`, `TEMP_SUFFIX`) and you edit
-  `IGNORE_BODY`, this repo's root `.gitignore`, this bullet, and the README's
-  "Private boards" note that tells people which lines to copy, in the same
-  commit — `TestQuietWrites::test_the_lock_and_the_scratch_are_the_two_ignored_names`
+  `IGNORE_BODY`, this repo's root `.gitignore`, this bullet, and the "Private
+  boards" note in `docs/store.md` that tells people which lines to copy, in the
+  same commit —
+  `TestQuietWrites::test_the_lock_and_the_scratch_are_the_two_ignored_names`
   pins the root file and
   `TestCreation::test_create_ignores_its_own_scratch_inside_the_store` the nested one.
 - **Tokens.** `rev` is gone. The client sends `tokens` — a per-file opaque
@@ -199,16 +200,21 @@ These break silently, which is the whole reason they are written down.
   second copy is how `127.0.0.2` ended up refused as writable while a
   `--allow-public` alias bind served with no rebinding guard at all.
 - **Shortcuts.** The key handler in `app.js`, the `openHelp` rows in the same
-  file, and the README's keyboard line are one list in three formats. Editing
-  one without the other two is a finding; `Esc` (close) and `Done` (close and
-  flush) are a pair — a new dialog needs both.
+  file, and the keyboard line in `docs/browser.md` are one list in three formats.
+  Editing one without the other two is a finding —
+  `TestClientContracts::test_every_shortcut_exists_in_the_handler_the_help_panel_and_the_docs`
+  fails the mismatch. `Esc` (close) and `Done` (close and flush) are a pair — a
+  new dialog needs both.
 - **Read-only.** `--read-only` must be honest end to end: the server refuses
   every POST, `payload()["read_only"]` tells the client, `send()` returns `null`
   so a caller's `if (ok)` cannot lie about a save that never happened, and the
   write controls are disabled.
-- **`docs:` and the README.** When the code changes what the README claims
-  (a flag, an exit code, a key, what the commit button stages), the README
+- **`docs:` and the docs.** When the code changes what the docs claim (a flag, an
+  exit code, a key, what the commit button stages), the doc that claims it
   changes in the same commit, or in its own `docs:` commit immediately after.
+  The README is the short route in; `docs/` is where the durable claims live, so
+  anything that has to be re-checked whenever the UI moves belongs there and not
+  on the front page.
 - **The demo fixture.** `examples/demo/.yamlboard` *is* the README's quick
   start, so a broken fixture breaks the first thing every reader copies. Read it
   through `store.Store` and `api.summary` rather than pasting invented output,
@@ -221,9 +227,9 @@ These break silently, which is the whole reason they are written down.
   went with the orphan rewrite and there is no generator. The rule is what
   happens if anyone adds some — a screenshot is a checked-in artefact with
   nothing keeping it honest, so either regenerate all of them from the demo
-  store in the same commit that changes the UI, or delete them and every README
-  line that points at them. A picture of a board that no longer exists is worse
-  than no picture.
+  store in the same commit that changes the UI, or delete them and every line in
+  the README and `docs/browser.md` that points at them. A picture of a board that
+  no longer exists is worse than no picture.
 
 ## Coordination
 
@@ -242,9 +248,13 @@ like the rest, because each of them has a second and third copy elsewhere.
   one commit.
 - **P40** The exit-code *set* is `{0,1,2,3,130,141}` and each code means the same
   thing in all four places it appears: the `EXIT_*` constants in `cli.py`, the
-  `EPILOG` table, the README's table, and `SKILL.md`'s table. The two tables are
-  the contract's terse wording verbatim; the epilog may add a sentence per code,
-  because it is the one a person reads when a command just failed on them.
+  `EPILOG` table, the table in `docs/cli.md`, and `SKILL.md`'s table. The last
+  two are the contract's terse wording verbatim — the same list word for word —
+  so
+  `TestAntiDrift::test_the_exit_table_is_the_same_list_in_all_four_places`
+  compares all four, and cannot pass on a table that merely agrees on which
+  numbers exist. The epilog may add a sentence per code, because it is the one a
+  person reads when a command just failed.
   `3` means *someone else holds it* and nothing else — a mistyped or unlisted
   agent name is `2`, because the fix is to re-run the same command with a better
   name, not to choose other work. `1` is only ever `serve` failing to bind.
