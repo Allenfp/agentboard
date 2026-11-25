@@ -319,19 +319,30 @@ def lease_seconds(requested: Any, board: dict | None) -> int:
     return parse_ttl(requested)
 
 
-def _stamp(value: Any) -> dt.datetime | None:
-    """A written timestamp as a datetime, or None if it is not one."""
+def instant(value: Any) -> dt.datetime | None:
+    """A written timestamp as a naive *local* datetime, or None if it is not one.
+
+    Naive local because that is what :func:`now` returns, and every lease
+    comparison below subtracts one from the other. An aware stamp is converted,
+    not truncated: dropping ``tzinfo`` on ``...T12:15:39+00:00`` read as 12:15
+    local, which here is a lease eight and a half hours longer than the one that
+    was written — a card held long after its owner stopped working, with a
+    countdown the browser computed correctly from the very same offset.
+    """
     if isinstance(value, dt.datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, dt.date):
+        parsed = value
+    elif isinstance(value, dt.date):
         return dt.datetime(value.year, value.month, value.day)
-    if is_str(value):
+    elif is_str(value):
         try:
             parsed = dt.datetime.fromisoformat(value)
         except ValueError:
             return None
-        return parsed.replace(tzinfo=None)
-    return None
+    else:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def claim_of(card: dict | None) -> dict | None:
@@ -351,7 +362,7 @@ def claim_live(claim: dict | None, at: dt.datetime | None = None) -> bool:
         return False
     if claim.get("overridden_by"):
         return False
-    expires = _stamp(claim.get("expires"))
+    expires = instant(claim.get("expires"))
     if expires is None:
         return False
     return expires > (at or now())
@@ -359,7 +370,7 @@ def claim_live(claim: dict | None, at: dt.datetime | None = None) -> bool:
 
 def ttl_left(claim: dict, at: dt.datetime | None = None) -> int:
     """Whole seconds of lease remaining, never negative."""
-    expires = _stamp(claim.get("expires"))
+    expires = instant(claim.get("expires"))
     if expires is None:
         return 0
     return max(0, int((expires - (at or now())).total_seconds()))
@@ -367,7 +378,7 @@ def ttl_left(claim: dict, at: dt.datetime | None = None) -> int:
 
 def claim_span(claim: dict) -> int:
     """That claim's own full TTL in seconds, for the UI's amber threshold."""
-    taken, expires = _stamp(claim.get("at")), _stamp(claim.get("expires"))
+    taken, expires = instant(claim.get("at")), instant(claim.get("expires"))
     if not taken or not expires:
         return TTL_MIN
     return max(1, int((expires - taken).total_seconds()))
@@ -392,15 +403,24 @@ def normalize_pattern(pattern: Any) -> str:
     Absolute paths and ``..`` are refused rather than normalised: a claim is a
     promise other agents rely on, and ``../secrets/**`` silently rewriting to a
     relative path would be a promise nobody read.
+
+    ``.`` and empty segments *are* collapsed, and that is a safety property, not
+    tidiness: ``patterns_overlap`` compares segment lists, so a stored
+    ``./src/api/**`` shares no leading segment with a live ``src/api/**`` and the
+    two read as disjoint. Two agents then both claim the same tree, the exact
+    loss the claim layer exists to prevent, and the ``./`` spelling is what a
+    shell completion or an agent copying a relative path produces.
     """
     text = str(pattern or "").strip().replace("\\", "/")
     if not text:
         raise ValidationError(["--paths: empty pattern"])
     if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
         raise ValidationError([f"--paths {text!r}: use a path relative to the repo root"])
-    if any(part == ".." for part in text.split("/")):
+    parts = text.split("/")
+    if any(part == ".." for part in parts):
         raise ValidationError([f"--paths {text!r}: cannot reach outside the repo"])
-    return text.strip("/") or "."
+    kept = [part for part in parts if part not in ("", ".")]
+    return "/".join(kept) or "."
 
 
 def patterns_overlap(left: Any, right: Any) -> bool:
@@ -691,7 +711,7 @@ def _check_when(value: Any, path: str, errors: list[str]) -> None:
     """created/updated/claim.at: a datetime, a date, or a strict ISO string."""
     if value is None:
         return
-    if isinstance(value, (dt.datetime, dt.date)) or _stamp(value) is not None:
+    if isinstance(value, (dt.datetime, dt.date)) or instant(value) is not None:
         return
     errors.append(f"{path}: expected a timestamp like 2026-11-18T09:12:00")
 

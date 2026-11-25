@@ -22,7 +22,12 @@ if (!target) { console.error("usage: client_harness.mjs path/to/app.js"); proces
    itself in place, so `firstChild`/`remove`/`append` and an `#id` lookup have to
    agree with each other, or a test of "the paths box survived the repaint"
    passes on a stub that never moved anything. Deliberately tiny: no layout, no
-   events bubbling, no CSS matching beyond "#id" and ".class". */
+   events bubbling, CSS matching limited to "#id", ".class" and [data-x="y"].
+
+   Focus is real, though: detaching a node blurs whatever it held, the way a
+   browser moves focus to <body> when the element under the caret disappears.
+   Without that, a test of "the tile is still focused after a rebuild" passes on
+   a stub where the old detached tile quietly keeps focus forever. */
 let focused = null;
 class FakeNode {
   constructor(tag) {
@@ -48,26 +53,34 @@ class FakeNode {
   get textContent() {
     return this.nodeType === 3 ? String(this.data ?? "") : this.childNodes.map((n) => n.textContent).join("");
   }
-  set textContent(v) { this.childNodes.forEach((n) => { n.parentNode = null; }); this.childNodes = []; if (v !== "") this.append(document.createTextNode(String(v))); }
-  append(...kids) { for (const k of kids.flat(9)) { if (k.parentNode) k.parentNode.childNodes.splice(k.parentNode.childNodes.indexOf(k), 1); k.parentNode = this; this.childNodes.push(k); } return this; }
+  _blurIfInside() { if (focused && this.contains(focused)) { focused = null; document.activeElement = document.body; } }
+  set textContent(v) { this._blurIfInside(); this.childNodes.forEach((n) => { n.parentNode = null; }); this.childNodes = []; if (v !== "") this.append(document.createTextNode(String(v))); }
+  /* Strings are legal children: `paintGit` appends "git off" straight onto a
+     button. Coerced to text nodes here, or a full render() throws on a stub
+     limitation that looks exactly like a production crash. */
+  append(...kids) { for (let k of kids.flat(9)) { if (typeof k !== "object" || !k) k = text(String(k)); if (k.parentNode) k.parentNode.childNodes.splice(k.parentNode.childNodes.indexOf(k), 1); k.parentNode = this; this.childNodes.push(k); } return this; }
   appendChild(k) { this.append(k); return k; }
-  remove() { if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; }
+  remove() { this._blurIfInside(); if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; }
   setAttribute(k, v) { this.attrs[k] = String(v); if (k.startsWith("data-")) this.dataset[k.slice(5)] = String(v); }
   getAttribute(k) { return this.attrs[k] ?? null; }
   contains(n) { for (let p = n; p; p = p.parentNode) if (p === this) return true; return false; }
   closest(sel) { for (let p = this; p; p = p.parentNode) if (p.matches?.(sel)) return p; return null; }
-  matches(sel) {
-    if (sel.startsWith("#")) return this.attrs.id === sel.slice(1);
-    if (sel.startsWith(".")) return this._classes.has(sel.slice(1));
-    return this.tagName === sel.toUpperCase();
-  }
-  /* app.js looks up "#boot .boot-note"; without a descendant branch that
-     lookup returns null and the bootstrap's own error handler throws inside
-     the catch, which is a stub bug wearing a production stack trace. */
+  /* One matcher behind `matches`/`closest` and `querySelectorAll`; they used to
+     disagree. querySelectorAll grew a [data-id="WEB-2"] branch and matches never
+     learned it, so `closest("[data-id]")` answered null inside a tree this same
+     stub had just searched by that selector — and `render()` restores focus
+     through exactly that call, so the gap reads as app.js losing the place.
+     A bare [attr] means "has it", as in a browser. */
+  matches(sel) { return this._matchOne(sel); }
   _matchOne(part) {
     if (part.startsWith("#")) return this.attrs.id === part.slice(1);
     if (part.startsWith(".")) return this._classes.has(part.slice(1));
-    return this.tagName === part.toUpperCase();
+    const attr = part.match(/^\[([\w-]+)(?:="(.*)")?\]$/);
+    if (!attr) return this.tagName === part.toUpperCase();
+    if (!attr[1].startsWith("data-"))
+      return attr[2] === undefined ? attr[1] in this.attrs : this.attrs[attr[1]] === attr[2];
+    const key = attr[1].slice(5);
+    return attr[2] === undefined ? key in this.dataset : this.dataset[key] === attr[2];
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
@@ -174,11 +187,13 @@ const observed = vm.runInContext(`(function () {
     live: true, claim: { agent: "ada", left: 900, span: 1800 } }]);
   claimed.tokens = { board: "b1", "WEB-1": "t2" };
   const claimOnly = movedFiles(before, claimed);
-  r.claim_only = { claims: claimOnly.claims, content: claimOnly.content };
+  r.claim_only = { claims: claimOnly.claims, content: claimOnly.content,
+                   rebuild: claimOnly.rebuild };
   const edited = JSON.parse(JSON.stringify(claimed));
   edited.doc.boards[0].cards[0].title = "a human renamed it";
   const withEdit = movedFiles(before, edited);
-  r.human_edit = { claims: withEdit.claims, content: withEdit.content };
+  r.human_edit = { claims: withEdit.claims, content: withEdit.content,
+                   rebuild: withEdit.rebuild };
   const moved_ = board([{ id: "WEB-2", title: "new", state: "ready" }]);
   moved_.tokens = { board: "b1", "WEB-2": "t9" };
   r.card_appeared = movedFiles(before, moved_).added;
@@ -342,6 +357,40 @@ const observed = vm.runInContext(`(function () {
     const asHolder = labels(section);
     pick(all(section, "SELECT")[0], "ada");      // now wearing ada
     return { asHolder, asStranger: labels(section), who: currentAgent() };
+  })();
+
+  /* A poll that rebuilds the board must not move the keyboard. This drives the
+     real render(), so it fails if the restore is dropped -- and it can only pass
+     at all because the stub blurs on detach, the way a browser does. */
+  r.focus_survives_rebuild = (() => {
+    S.state = board([{ id: "WEB-1", title: "a", column: "todo", state: "ready" },
+                     { id: "WEB-2", title: "b", column: "todo", state: "ready" }]);
+    S.state.ready = ["WEB-1", "WEB-2"];
+    S.boardId = "web";
+    buildShell();
+    render();
+    const tile = document.querySelector('[data-id="WEB-2"]');
+    if (!tile) return { error: "the board rendered no tiles" };
+    tile.focus();
+    const before = document.activeElement?.dataset?.id || null;
+    render();                                  // another writer; the poll rebuilds
+    return { before,
+             after: document.activeElement?.dataset?.id || document.activeElement?.tagName };
+  })();
+
+  /* A finished card is not offered as takeable. state_of has no word for it,
+     so the tile reads the ready list -- the same source the filter reads. */
+  r.finished_is_not_accented = (() => {
+    S.showArchived = false;
+    S.state = board([{ id: "WEB-1", title: "open", column: "todo", state: "ready" },
+                     { id: "WEB-2", title: "shipped", column: "done", state: "ready" }]);
+    S.state.ready = ["WEB-1"];                 // the server leaves the done card out
+    S.boardId = "web";
+    buildShell();
+    render();
+    const tile = (id) => document.querySelector('[data-id="' + id + '"]');
+    return { open: tile("WEB-1")?._classes.has("ready-look"),
+             done: tile("WEB-2")?._classes.has("ready-look") };
   })();
   const seen = new WeakSet();
   return JSON.stringify(r, (k, v) => {

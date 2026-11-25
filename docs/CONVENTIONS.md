@@ -169,7 +169,11 @@ These break silently, which is the whole reason they are written down.
   `TestCreation::test_create_ignores_its_own_scratch_inside_the_store` the nested one.
 - **Tokens.** `rev` is gone. The client sends `tokens` — a per-file opaque
   `mtime_ns-size` stamp from `api.tokens_of`, keyed `"board"` or by card id —
-  and `Tx.flush` refuses to write any file whose bytes moved since. A whole-store
+  and `Tx.flush` refuses to write any file whose bytes moved since — including
+  one that was deleted. A token is checked against the file the document was read
+  from (`Tx.source_of`), never against wherever `locate()` finds that id now: a
+  deleted file answers `None` there, which reads as nothing to check, and the
+  write resurrects a card somebody removed. A whole-store
   counter made two unrelated cards look like a conflict, which is the bug the
   rewrite exists to fix; a new write path that does not carry tokens for the
   files it touches is a data-loss bug. The CLI may pass none (an agent editing
@@ -186,8 +190,8 @@ These break silently, which is the whole reason they are written down.
 - **Enum drift.** `model.PRIORITIES` and `model.FIELD_TYPES` are the single
   source; `app.js` keeps its own copy of both (it cannot import Python) for the
   dropdowns, and `styles.css` carries a `--prio-*` token per priority.
-  `TestEnumDrift` in `test_api.py` reads `app.js` and fails the suite if a value
-  is added on one side only.
+  `TestAntiDrift` in `test_api.py` reads `app.js` and `styles.css` and fails the
+  suite if a value is added on one side only.
 - **Loopback.** `server.is_loopback` is the only definition of "only this
   machine can reach it" — the bind check, the banner warning, the printed URL
   and, through `server.local_hosts`, the Host/Origin allowlist all derive from
@@ -279,9 +283,11 @@ like the rest, because each of them has a second and third copy elsewhere.
   deletes an unrelated card that merely shares its name.
 - **P44** Identity resolves in exactly one place, `identity.resolve`: `--as`,
   then `$YAMLBOARD_AGENT`, then the local part of `git config user.email`, and
-  it must already be in `people`. Nothing creates a person anywhere in the
-  codebase. The resolved name is echoed before a mutating write, and never in
-  `--json`.
+  it must already be in `people`. No CLI verb creates a person — `init` seeds the
+  roster with the identity it was named as, and `person.create` from the browser's
+  Settings is the only other door. Neither invents a name from a claim, which is
+  the widening the list exists to stop. The resolved name is echoed before a
+  mutating write, and never in `--json`.
 
 ## Git
 
@@ -325,7 +331,7 @@ like the rest, because each of them has a second and third copy elsewhere.
   says what the isolation buys. Fixture data is an inline YAML literal, not a
   file in the repo.
 - **P38** Test names are behaviour sentences
-  (`test_a_stale_token_is_refused_and_answers_with_the_fresh_board`), and a
+  (`test_a_write_based_on_stale_bytes_is_409_with_the_fresh_document`), and a
   broken fixture raises `AssertionError("no card X")` rather than failing with an
   `AttributeError` three frames away. `TemporaryDirectory()` + `addCleanup`; git
   tests set `GIT_CONFIG_GLOBAL=/dev/null` and friends so your `~/.gitconfig`

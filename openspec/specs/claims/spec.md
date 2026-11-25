@@ -35,6 +35,24 @@ The refusal SHALL name the holder, the expiry time, and the time remaining.
 - **WHEN** the holder claims a card it already holds, with the same or no paths
 - **THEN** the result is success, nothing is written, and the output says the card is already theirs
 
+### Requirement: Finished and retired work is not offered
+A card in a column marked done, or retired to the archive, SHALL NOT be claimable
+by anyone. The refusal SHALL say the work is finished or retired, and SHALL name
+the action that genuinely reopens it — moving the card out of the done column, or
+unarchiving it in the card panel — rather than only sending the caller elsewhere.
+
+#### Scenario: A finished card is refused
+- **WHEN** an agent tries to claim a card sitting in a done column
+- **THEN** the attempt is refused with the claim-denied status, the column is named, and no lease is written
+
+#### Scenario: A retired card is refused
+- **WHEN** an agent tries to claim a card held in the archive
+- **THEN** the attempt is refused, and the card stays in the archive
+
+#### Scenario: The refusal does not pretend the card is someone else's
+- **WHEN** either refusal is reported
+- **THEN** it names no holder, and points at the command or panel that reopens the work rather than at a re-claim
+
 ### Requirement: Expiry is release
 A claim whose expiry is in the past SHALL not be a claim. No background process
 SHALL be required to free it. A card with an expired claim SHALL appear in the
@@ -51,8 +69,8 @@ name of the agent whose expired claim it replaced.
 
 ### Requirement: Lease length is bounded and configurable
 A claim SHALL be taken with a lease duration expressible in seconds, minutes, hours
-or days, defaulting to thirty minutes, clamped to a floor of thirty seconds and a
-ceiling of twenty-four hours. A board SHALL be able to declare its own default
+or days, defaulting to thirty minutes, and refused outside a floor of thirty seconds
+and a ceiling of twenty-four hours. A board SHALL be able to declare its own default
 duration. Renewing SHALL extend expiry by one full duration from now.
 
 #### Scenario: A tiny lease is refused

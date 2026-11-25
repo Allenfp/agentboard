@@ -231,6 +231,44 @@ class TestCommitScoping(GitRepo):
         self.assertEqual(git(self.repo, "log", "-1", "--format=%s"),
                          "yamlboard: ship the release")
 
+    def test_a_global_only_identity_is_not_forged_into_the_author(self) -> None:
+        """A repo with no local user.email commits as the user, not as hostname.
+
+        ``_env`` zeroes ``GIT_CONFIG_GLOBAL`` to keep a stray global config off
+        the read path, but the write path needs the identity stored there. Left
+        unfixed, git either refused (Linux, exit 128) or fabricated
+        ``user@host.local`` (macOS) — a commit silently authored by nobody, in a
+        repo whose whole job is attributing work to people. A real data repo
+        picked up exactly such a commit before this was caught.
+        """
+        fresh = self.dir / "global-only"
+        fresh.mkdir()
+        git(fresh, "init", "-q", "-b", "main")
+        board_dir = fresh / ".yamlboard"
+        board_dir.mkdir()
+        (board_dir / "boards.yaml").write_text(STARTER, encoding="utf-8")
+        # Seed with an inline identity so HEAD exists without leaving repo config.
+        git(fresh, "-c", "user.name=Seed", "-c", "user.email=seed@x.test",
+            "add", "-A")
+        git(fresh, "-c", "user.name=Seed", "-c", "user.email=seed@x.test",
+            "commit", "-qm", "seed")
+        local = subprocess.run(["git", "config", "--local", "--get", "user.email"],
+                               cwd=str(fresh), capture_output=True, text=True,
+                               env={**os.environ, **GIT_ENV})
+        self.assertNotEqual(local.returncode, 0)   # no local identity to lean on
+        (board_dir / "boards.yaml").write_text(STARTER + "# edited\n",
+                                               encoding="utf-8")
+
+        gconf = self.dir / "global.gitconfig"
+        gconf.write_text("[user]\n\tname = Ada Lovelace\n"
+                         "\temail = ada@corp.test\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(gconf)}):
+            result = gitops.commit(board_dir, "boards(test): global identity")
+
+        self.assertTrue(result["committed"], result)
+        self.assertEqual(git(fresh, "log", "-1", "--format=%ae"), "ada@corp.test")
+        self.assertEqual(git(fresh, "log", "-1", "--format=%an"), "Ada Lovelace")
+
 
 class TestOutsideRepo(GitRepo):
     def test_a_root_that_does_not_contain_the_board_is_reported_not_ok(self) -> None:

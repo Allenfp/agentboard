@@ -53,8 +53,8 @@ unrecoverable and "already initialised" costs you one confused second.
 It also lists whoever it was named as — here `allen`, from
 `git config user.email`, or whoever you passed to `--as`. That is not a
 convenience: a board with an empty `people` list is one nothing can ever be
-claimed from, and no other command adds people, because letting a claim widen
-the list it is checked against is exactly what the list is there to prevent.
+claimed from, and no CLI verb adds one — letting a claim widen the list it is
+checked against is exactly what the list is there to prevent.
 Add teammates in the board's Settings, or by hand in `.yamlboard/board.yaml`:
 
 ```yaml
@@ -203,10 +203,11 @@ error: blocked_by would form a cycle: PROD-8 -> PROD-9 -> PROD-8
 |130|interrupted|
 |141|pipe closed|
 
-**3 means someone else holds it.** Pick other work; retrying does not make the
-holder's lease lapse any sooner. `1` is `serve` failing to bind, where nothing you
-typed is wrong. An agent that mistyped its own name gets `2`, not `3` — `3` has to
-mean "choose different work", never "fix your name".
+**3 means someone else holds it, or the work is finished.** Pick other work;
+retrying does not make the holder's lease lapse any sooner, and no claim reopens
+a done card. `1` is `serve` failing to bind, where nothing you typed is wrong. An
+agent that mistyped its own name gets `2`, not `3` — `3` has to mean "choose
+different work", never "fix your name".
 
 `check` and `conflicts` exit 2 when they have something to report, so CI fails on
 a board that is lying about itself. `141` is `yamlboard list | head` closing the
@@ -331,13 +332,19 @@ $ yamlboard check --dir examples/demo
 /home/you/my-repo/examples/demo/.yamlboard
   2 board(s), 14 card(s), 3 people
   conflict: overlap: PROD-2 (ada) and PROD-3 (grigory) claim the same files
-  conflict: PROD-2 claims tests/test_api.py but the working tree already has changes in tests/test_api.py
 
-2 conflict(s): yamlboard conflicts --resolve frees the loser of an overlap and corrects a mismatched card id
+1 conflict(s): yamlboard conflicts --resolve frees the loser of an overlap and corrects a mismatched card id
 ```
 
-Its leases are timestamps, not promises: they will lapse, and those cards go back
-to `ready`.
+Its leases are timestamps, not promises: hand-written so a fresh clone opens on
+a board with something in flight, and they lapse -- which sends those cards back
+to `ready`. That is the mechanism working, not a fixture gone stale. To put the
+tour's traffic back on (`check` reporting that overlap again), renew them:
+
+```bash
+yamlboard renew PROD-2 --as ada   && yamlboard renew PROD-7 --as ras
+yamlboard renew PROD-3 --as grigory && yamlboard renew PROD-6 --as ras
+```
 
 ## Conflicts: detected, never prevented
 
@@ -351,8 +358,8 @@ surfaced to a human:
 $ yamlboard conflicts
 overlap: PROD-2 (ada) and PROD-3 (grigory) claim the same files
   src/api/** ∩ src/api/routes.py
-  winner ada on PROD-2 (claimed 2026-11-24T00:40:00)
-  loser  grigory on PROD-3 (claimed 2026-11-24T00:52:00)
+  winner ada on PROD-2 (claimed 2026-11-25T09:00:00)
+  loser  grigory on PROD-3 (claimed 2026-11-25T09:30:00)
   earliest `at` wins; a tie goes to the alphabetically first name
 
 next: yamlboard conflicts --resolve   # frees the loser of an overlap, and corrects a card whose id disagrees with its filename

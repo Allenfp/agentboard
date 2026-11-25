@@ -122,6 +122,12 @@ duplicate names an id, and the reader needs the path to fix it.
 - **WHEN** a live claim's patterns match files modified but uncommitted in the working tree
 - **THEN** the overlap is reported and nothing is reverted
 
+#### Scenario: The work is the claimant's own
+- **WHEN** the report is requested naming the agent who holds that claim
+- **THEN** that claim is not reported — a modified file cannot say who modified it, and edits inside a path you were authorised to take are the work the claim was taken for
+- **AND** the same claim is still reported to any other asker, including a gate running with no identity at all
+- **AND** the human dashboard keeps showing it to everyone, because adjudicating it is a person's job, not the claimant's
+
 ### Requirement: Conflicts reach the human
 Every reported conflict SHALL be visible in the browser as well as in command
 output, and resolving from the browser SHALL produce the same recorded outcome as

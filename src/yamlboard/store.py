@@ -201,6 +201,22 @@ def _file_id(path: Path) -> str | None:
     return str(ident) if model.is_str(ident) else None
 
 
+def _is_path(source: Path | None, target: Path) -> bool:
+    """Is ``target`` the very file ``source`` names? Missing is not equal.
+
+    ``resolve`` because the store's root arrives through whatever spelling the
+    caller had — on macOS a ``/var`` symlink means two strings for one file, and
+    comparing those would let an in-place rewrite look like a move into a
+    stranger and refuse a write that is simply saving a card where it lives.
+    """
+    if source is None:
+        return False
+    try:
+        return Path(source).resolve() == target.resolve()
+    except OSError:
+        return False
+
+
 def _dumps(doc: dict, sequence: int, offset: int) -> bytes:
     buffer = io.StringIO()
     _yaml(sequence, offset).dump(doc, buffer)
@@ -349,7 +365,8 @@ class Store:
             raise NotFound(f"no card {card_id!r}")
         return _read_file(path, None)
 
-    def _card_files(self, directory: Path, board: dict | None = None) -> list[File]:
+    def _card_files(self, directory: Path, board: dict | None = None,
+                    ids: set[str] | None = None) -> list[File]:
         """Every card file in one directory, each tagged with its problems.
 
         An invalid card is *kept*, its errors parked on ``result``: a board whose
@@ -365,12 +382,21 @@ class Store:
         took down ``check``, ``serve`` and every write with an
         ``AttributeError``, which is exactly the brick this method exists to
         prevent.
+
+        ``ids`` is the id set every card's ``blocked_by`` is checked against, and
+        it has to be the whole store's: built from the one directory being read,
+        archiving a blocker makes its dependents' edges dangle. That verdict is
+        then frozen on the handle, so the false "is not a card in this store"
+        refuses every later write to that card — including the
+        ``dep remove`` that would have corrected it. Fallback stays per-directory
+        for callers that read one directory in isolation.
         """
+        # ``_card_paths`` yields nothing for a missing directory, which is the
+        # same answer as the old ``is_dir`` guard: a store with no archive yet.
         found: list[File] = []
-        if not directory.is_dir():
-            return found
-        paths = [p for p in sorted(directory.glob("*.yaml")) if CARD_RE.match(p.stem)]
-        ids = {p.stem for p in paths}
+        paths = self._card_paths(directory)
+        if ids is None:
+            ids = {p.stem for p in paths}
         for path in paths:
             try:
                 handle = _read_file(path, None)
@@ -410,18 +436,33 @@ class Store:
         handle.result = [problem]
         return handle
 
+    @staticmethod
+    def _card_paths(directory: Path) -> list[Path]:
+        """The files in one directory that are named like cards."""
+        try:
+            return [p for p in sorted(directory.glob("*.yaml")) if CARD_RE.match(p.stem)]
+        except OSError:
+            return []
+
     def read_all(self) -> Snapshot:
         """Board plus every card file, each with its own token."""
         board = self.read_board()
+        # One id set for both directories. An edge pointing into ``archive/``
+        # still points at a card that exists; validated per-directory, archiving
+        # a blocker makes every dependent's ``blocked_by`` read as dangling, and
+        # that false verdict then blocks the write that would correct it.
+        card_ids = {p.stem for d in (self.cards_dir, self.archive_dir)
+                    for p in self._card_paths(d)}
         return Snapshot(
             board,
-            _ordered(self._card_files(self.cards_dir, board.doc)),
-            _ordered(self._card_files(self.archive_dir, board.doc)),
+            _ordered(self._card_files(self.cards_dir, board.doc, card_ids)),
+            _ordered(self._card_files(self.archive_dir, board.doc, card_ids)),
         )
 
     # -- writing ------------------------------------------------------------ #
 
-    def write_card(self, doc: dict, *, board: dict | None = None) -> File:
+    def write_card(self, doc: dict, *, board: dict | None = None,
+                   source: Path | None = None) -> File:
         """Write a card document where its ``archived`` flag says it belongs.
 
         The directory is part of the document's meaning, so archiving is one
@@ -429,6 +470,10 @@ class Store:
         ``card.archive`` flipping ``archived:`` and a hand-edit that set the key
         in an editor then both land the file in ``archive/`` without a second
         code path.
+
+        ``source`` is the file this document was read from, when it was read from
+        one. It is what tells an in-place rewrite from a move, and the difference
+        is data loss: see the guard on ``target`` below.
         """
         card_id = str((doc or {}).get("id") or "")
         archived = bool((doc or {}).get("archived"))
@@ -447,6 +492,25 @@ class Store:
                 raise ValidationError(errors)
             target = self.card_path(card_id, archived=archived)
             stale = self.card_path(card_id, archived=not archived)
+            # The sibling gets proven before it is deleted; the target needs the
+            # same proof, because a card read from one directory can be written
+            # into the other. Two clones that each archived a different card to
+            # the same basename merge into `archive/WEB-9.yaml` holding `id:
+            # WEB-8` while `cards/WEB-9.yaml` holds `id: WEB-9` — a state
+            # `conflicts` reports and refuses to arbitrate. Without this guard,
+            # editing the live card's *title* wrote over the archived stranger
+            # and deleted it: the clobber came from the plain `card.update` path,
+            # nowhere near the repair that had correctly declined to choose.
+            # Unreadable is unprovable, so it is refused for the same reason.
+            if target.is_file() and not _is_path(source, target):
+                ahead = _file_id(target)
+                if ahead != card_id:
+                    where = "the archive" if archived else "the live cards"
+                    raise ValidationError([
+                        f"card {card_id!r}: {target.name} already holds card "
+                        f"{ahead!r} in {where} — two merged files want one name. "
+                        "Renaming one is a human call; `yamlboard conflicts` "
+                        "names the pair."])
             # The sibling path holds the same id in the other directory, which is
             # normally this card changing between live and archived -- ours to
             # remove. "Normally" is doing the work there: two files can carry one
@@ -466,35 +530,6 @@ class Store:
         """Write ``board.yaml`` as-is; the caller has already validated it."""
         with locked(self.root):
             return _write_file(self.board_path, doc)
-
-    def archive(self, card_id: str) -> Path:
-        """Move a card into ``archive/`` — a rename, so git sees one clean move."""
-        with locked(self.root):
-            source = self.card_path(card_id)
-            if not source.is_file():
-                raise NotFound(f"no card {card_id!r} to archive")
-            target = self.card_path(card_id, archived=True)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                raise ValidationError([f"{target.name} already exists in the archive"])
-            os.replace(str(source), str(target))
-            _fsync_dir(source.parent)
-            _fsync_dir(target.parent)
-            return target
-
-    def unarchive(self, card_id: str) -> Path:
-        with locked(self.root):
-            source = self.card_path(card_id, archived=True)
-            if not source.is_file():
-                raise NotFound(f"no archived card {card_id!r}")
-            target = self.card_path(card_id)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                raise ValidationError([f"card {card_id!r} already exists, not restoring"])
-            os.replace(str(source), str(target))
-            _fsync_dir(source.parent)
-            _fsync_dir(target.parent)
-            return target
 
     def remove_card(self, card_id: str) -> None:
         with locked(self.root):

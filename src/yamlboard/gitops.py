@@ -75,6 +75,32 @@ def _config() -> list[str]:
     return ["-c", "core.fsmonitor=false"]
 
 
+def _identity_args(root: Path) -> list[str]:
+    """Pass the committer's own configured identity to a write.
+
+    ``_env`` points ``GIT_CONFIG_GLOBAL`` at ``/dev/null`` so a stray global
+    config cannot hijack a read, but a commit needs the user's identity, and
+    without it git either refuses (Linux: exit 128) or invents one from
+    hostname+username (macOS: a real commit authored ``<user>@<host>.local``).
+    Reading the effective value through :func:`config_value` — the same lookup
+    the identity resolver uses — and re-applying it with ``-c`` gives git back
+    the person it would have used anyway, precedence intact: ``config_value``
+    already returns repo-local over global, so where a repo *has* a local
+    identity, injecting that same value changes nothing. If neither is set, this
+    returns empty and git refuses with its own ``who you are`` message, which is
+    honest; silently forging an identity is not.
+    """
+    args: list[str] = []
+    for key in ("user.name", "user.email"):
+        try:
+            value = config_value(root, key)
+        except GitError:
+            return args            # partial identity is worse than none
+        if value:
+            args += ["-c", f"{key}={value}"]
+    return args
+
+
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     """One git call, killed politely if it wedges.
 
@@ -395,8 +421,10 @@ def commit(target: Path, message: str) -> dict:
                 "commit or unstage them first, so this button cannot commit someone else's work"
             )
 
-        # -m only, no editor: the UI has already supplied the message.
-        committed = _run(["git", "commit", "-m", message], root)
+        # -m only, no editor: the UI has already supplied the message. The
+        # identity args sit before the subcommand, so the commit is authored by
+        # the person who set up git, not by a hostname guess.
+        committed = _run(["git", *_identity_args(root), "commit", "-m", message], root)
         if committed.returncode != 0:
             output = (committed.stderr or committed.stdout).strip()
             if "nothing to commit" in output or "no changes added" in output:

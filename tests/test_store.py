@@ -912,36 +912,6 @@ class TestAtomicReplace(Base):
 class TestArchiveAndRemove(Base):
     """Retiring a card is a rename, so git sees a move instead of a rewrite."""
 
-    def test_archiving_moves_the_file_and_locate_follows(self) -> None:
-        """A move that left a copy behind yields two files with one id.
-
-        From then on ``ready`` and ``conflicts`` disagree about the card's claim
-        depending on which file a scan opens first, and the answer flips
-        between runs.
-        """
-        target = self.store.archive("PROD-1")
-        self.assertEqual(target, self.root / store.ARCHIVE_DIR / "PROD-1.yaml")
-        self.assertFalse(self.store.card_path("PROD-1").exists())
-        self.assertEqual(self.store.locate("PROD-1"), target)
-        self.assertEqual(self.store.card_ids(), ["PROD-1", "PROD-2"])
-        self.assertEqual(self.temps(), [])
-
-    def test_unarchiving_restores_the_same_bytes_it_moved(self) -> None:
-        """Undo must not lose the card's history or renumber it.
-
-        Re-issuing an id on restore breaks every ``blocked_by`` that named the
-        original, leaving dependency edges that point at cards which never
-        existed.
-        """
-        original = self.store.card_path("PROD-1").read_bytes()
-        moved = self.store.archive("PROD-1")
-        self.assertEqual(moved.read_bytes(), original)
-        back = self.store.unarchive("PROD-1")
-        self.assertEqual(back, self.store.card_path("PROD-1"))
-        self.assertEqual(back.read_bytes(), original)
-        self.assertEqual(self.card("PROD-1")["claim"]["agent"], "ada")
-        self.assertFalse(self.store.card_path("PROD-1", archived=True).exists())
-
     def test_flipping_archived_moves_it_without_a_second_call(self) -> None:
         """The directory is part of the document's meaning, not a side effect.
 
@@ -961,24 +931,29 @@ class TestArchiveAndRemove(Base):
                          ["PROD-2.yaml"])
 
     def test_a_move_that_would_clobber_is_refused_and_changes_nothing(self) -> None:
-        """An id already in the destination means a merge already went wrong.
+        """Restoring a retired card must not overwrite a live card of the same name.
 
-        Overwriting destroys one card outright; refusing keeps both files so a
-        human can see which claim survived and decide.
+        The mirror of the archive direction pinned in ``tests/test_api.py``; same
+        ``write_card`` guard. Two clones that each renamed a different card to one
+        basename merge into two files with one id, and restoring either is a
+        plain write from here. Overwriting destroys one card outright; refusing
+        keeps both so a human can see which survived.
         """
-        shutil.copy(self.store.card_path("PROD-1"),
-                    self.store.card_path("PROD-1", archived=True))
-        shutil.copy(self.store.card_path("PROD-2", archived=True),
-                    self.store.card_path("PROD-2"))
+        retired = self.card("PROD-2")                     # read from archive/
+        retired["archived"] = False                       # ... and restored
+        squatter = self.store.card_path("PROD-2")
+        squatter.write_text(
+            "id: PROD-9\ntitle: A live card that happens to share the name\n"
+            "column: doing\npriority: low\narchived: false\n", encoding="utf-8")
+        held = squatter.read_bytes()
+
         with self.assertRaises(ValidationError) as caught:
-            self.store.archive("PROD-1")
-        self.assertIn("already exists in the archive", " ".join(caught.exception.errors))
-        self.assertTrue(self.store.card_path("PROD-1").is_file(),
-                        "the refused archive deleted the live card")
-        with self.assertRaises(ValidationError) as caught:
-            self.store.unarchive("PROD-2")
-        self.assertIn("not restoring", " ".join(caught.exception.errors))
-        self.assertTrue(self.store.card_path("PROD-2", archived=True).is_file())
+            self.save(retired)                            # restores into cards/
+        self.assertIn("already holds", " ".join(caught.exception.errors))
+        self.assertEqual(squatter.read_bytes(), held,
+                         "restoring one card deleted another")
+        self.assertTrue(self.store.card_path("PROD-2", archived=True).is_file(),
+                        "the refused restore deleted the archived card")
         self.assertEqual(self.temps(), [])
 
     def test_removing_a_card_clears_whichever_copy_exists(self) -> None:
@@ -989,9 +964,7 @@ class TestArchiveAndRemove(Base):
         self.assertIsNone(self.store.locate("PROD-2"))
         self.assertEqual(self.store.card_ids(), ["PROD-1"])
         for call in (lambda: self.store.remove_card("PROD-2"),
-                     lambda: self.store.read_card("PROD-2"),
-                     lambda: self.store.archive("PROD-2"),
-                     lambda: self.store.unarchive("PROD-2")):
+                     lambda: self.store.read_card("PROD-2")):
             with self.assertRaises(store.NotFound):
                 call()
 

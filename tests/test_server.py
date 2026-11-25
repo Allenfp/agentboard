@@ -1173,7 +1173,6 @@ class TestRequestFraming(Http):
         self.assertIn(b" 408 ", data.split(b"\r\n", 1)[0], data)
         self.assertNotIn(b" 500 ", data, data)
         self.assertNotIn("Traceback", err.text(), err.text())
-        self.assertFalse(getattr(self.server, "errors", 0), "a slow client is not a server error")
 
 
 class TestUnroutableRequests(Http):

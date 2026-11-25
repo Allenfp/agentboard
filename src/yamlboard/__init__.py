@@ -1,4 +1,4 @@
-"""yamlboard: a kanban board that is just a YAML file in a git repo."""
+"""yamlboard: a board in your repo that says who holds what, so agents stop colliding."""
 
 __version__ = "0.1.0"
 

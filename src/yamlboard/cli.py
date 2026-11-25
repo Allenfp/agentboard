@@ -63,8 +63,9 @@ exit codes:
   0    ok
   1    cannot listen (the port is taken or the bind is refused)
   2    bad argument, refused operation, or a board file that does not validate
-  3    claim denied - another agent holds the card, or its paths overlap yours.
-       Pick other work; there is no --force for this, and that is deliberate.
+  3    claim denied - another agent holds the card, its paths overlap yours, or
+       the work is already finished. Pick other work; there is no --force for
+       this, and that is deliberate.
   130  interrupted
   141  stdout closed (a pipe ended)
 
@@ -253,10 +254,8 @@ def _card(out: Out, tx: api.Tx, card: dict, agent: str | None = None) -> None:
                  f"({model.humanize(model.ttl_left(claim))} left)")
         if claim.get("paths"):
             out.fact(f"  paths {', '.join(str(p) for p in claim['paths'])}")
-    blockers = model.blocked_by_open(
-        model.dependencies(tx.all_cards()), ident,
-        {str(c.get("id")) for c in tx.all_cards() if api._is_done(tx, c)},
-    )
+    blockers = model.blocked_by_open(model.dependencies(tx.all_cards()), ident,
+                                     api._settled_ids(tx))
     if blockers:
         out.fact(f"  blocked by {', '.join(blockers)}")
     if claim and claim.get("overridden_by"):
@@ -388,7 +387,12 @@ def verb_check(args: argparse.Namespace, out: Out) -> int:
     # read is the board quietly losing work — the one outcome this store exists
     # to avoid — and a CI gate should hear about it.
     strays = st.strays()
-    payload = api.summary(tx, dirty=_dirty(st))
+    # Asked as someone, a dirty tree inside *their* claim is the work they were
+    # authorised to do, not a collision; asked as nobody — CI, a stranger — every
+    # live claim is somebody else's and all of them count. Same optional identity
+    # chain as `list`, so a CI job that names no identity is unchanged.
+    agent = _who(args, tx.doc) if _identity_present(args) else None
+    payload = api.summary(tx, dirty=_dirty(st), agent=agent)
     reports = payload["conflicts"]
     cards = sum(len(b.get("cards") or []) for b in model.boards(payload["doc"]))
     # `ok` and the exit code are one answer, not two: the JSON path used to gate
@@ -438,15 +442,30 @@ def verb_show(args: argparse.Namespace, out: Out) -> int:
     if card is None:
         raise Usage(f"no card {args.id!r} in {st.root} (try: yamlboard list)")
     _card(out, tx, card, agent)
-    reasons = api.why_not_ready(tx, card, agent, _paths(args.paths))
-    if reasons:
-        # `show` is a read, but "you cannot take this" is exactly what exit 3
-        # means, so an agent can use it as a cheap pre-flight. The lines belong
-        # to the Denied handler; printing them here would say it twice.
-        raise Denied(reasons + [_next(agent)], {"reason": "ready_check", "card": args.id})
-    out.fact(f"  next: yamlboard claim {args.id} --paths '<glob>' --as {agent}"
-             if agent else f"  next: yamlboard claim {args.id} --paths '<glob>'")
-    out.data(ok=True, id=args.id, state=api.state_of(tx, card, agent), claimable=True)
+    # Ask `claim` what it would do, rather than keeping a second copy of the rule
+    # here. The copy drifted: holding a card made this exit 3 with "pick other
+    # work" while the claim it predicted answered 0 with "nothing written", so an
+    # agent that trusted the cheap pre-flight abandoned work it was mid-edit on.
+    # The refusal is `claim`'s refusal, lines and exit code intact, translated by
+    # the same helper that serves every write — a directory passed to --paths is
+    # exit 2 here exactly as it is for `claim`, not a traceback and not exit 3.
+    decision = _translated(
+        lambda: api.take_decision(tx, card, agent, _paths(args.paths)))
+    state = api.state_of(tx, card, agent)
+    if decision.get("unchanged"):
+        # Held, not free: `claimable` stays false, because the next command is a
+        # renew and not a claim, and a caller branching on this must not treat a
+        # lease it already owns as a lease it can win.
+        out.fact(f"  already yours until {decision.get('expires')} - renew it, "
+                 "do not re-claim it")
+        out.fact(f"  next: yamlboard renew {args.id}"
+                 + (f" --as {agent}" if agent else ""))
+        out.data(ok=True, id=args.id, state=state, claimable=False, unchanged=True,
+                 expires=decision.get("expires"))
+        return EXIT_OK
+    out.fact(f"  next: yamlboard claim {args.id} --paths '<glob>'"
+             + (f" --as {agent}" if agent else ""))
+    out.data(ok=True, id=args.id, state=state, claimable=True)
     return EXIT_OK
 
 
@@ -608,12 +627,15 @@ def verb_dep(args: argparse.Namespace, out: Out) -> int:
 def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
     st = _store(args)
     tx = api.Tx(st)
-    reports = api.conflicts(tx, _dirty(st))
     if args.resolve:
-        if not reports:
+        # Asked of the store, with nobody's identity subtracting from the answer.
+        # Filtering decides what one agent should go and look at; a resolve frees
+        # a claim whoever ran it, and gating it on the filtered list would let
+        # `--resolve` report "nothing to resolve" beside a conflict it could
+        # still clear. Identity is still demanded -- it owns the audit trail.
+        if not api.conflicts(tx, _dirty(st)):
             raise Usage("no conflicts to resolve")
-        agent = _who(args, tx.doc)
-        result = _run_op(st, out, agent, "conflicts.resolve", {})
+        result = _run_op(st, out, _who(args, tx.doc), "conflicts.resolve", {})
         for item in result["resolved"]:
             out.fact(_resolved_line(item))
         for line in result.get("needs_human") or []:
@@ -622,6 +644,11 @@ def verb_conflicts(args: argparse.Namespace, out: Out) -> int:
         out.data(ok=True, resolved=result["resolved"], count=result["count"],
                  needs_human=result.get("needs_human") or [])
         return EXIT_USAGE if result.get("needs_human") else EXIT_OK
+    # Read-only report: asked as someone, a dirty tree inside *their* claim is
+    # the work they were authorised to do, not a collision. Asked as nobody --
+    # CI, a stranger -- every live claim is somebody else's and all count.
+    agent = _who(args, tx.doc) if _identity_present(args) else None
+    reports = api.conflicts(tx, _dirty(st), as_agent=agent)
     for report in reports:
         out.fact(_conflict_line(report))
         for detail in _conflict_detail(report):
@@ -678,6 +705,15 @@ def verb_migrate(args: argparse.Namespace, out: Out) -> int:
         board["id"] = wanted["id"]
         board["key"] = wanted["key"]
         board["title"] = wanted["title"]
+    # Everything keyed by id merges the same way, and the reason is the same:
+    # ``--force`` means "add this file's cards to the board that is already
+    # here", not "roll that board back to how the v1 file looked". Replacing
+    # ``columns`` dropped every column the live board had added since - a
+    # reviewer's own column, or a `ready` lane with cards still in it vanished
+    # from the board at exit 0, and only the column *check* noticed, taking the
+    # whole migration down with it when a card happened to live there.
+    # A fresh store is different: there is nothing to preserve, so the migrated
+    # file's own columns and fields replace the defaults `init` wrote.
     for key in ("people", "labels"):
         section = api._section(tx, key)
         have = {str(item.get("id")) for item in section if model.is_map(item)}
@@ -687,8 +723,23 @@ def verb_migrate(args: argparse.Namespace, out: Out) -> int:
             if str(item.get("id")) not in have:
                 section.append(item)
                 have.add(str(item.get("id")))
-    board["custom_fields"] = plan["custom_fields"]
-    board["columns"] = plan["columns"]
+    for key in ("columns", "custom_fields"):
+        if fresh:
+            board[key] = plan[key]
+            continue
+        current = board.get(key)
+        if not model.is_list(current):
+            current = board[key] = []
+        have = {str(item.get("id")) for item in current if model.is_map(item)}
+        added = [str(item.get("id")) for item in plan[key]
+                 if str(item.get("id")) not in have]
+        for item in plan[key]:
+            if str(item.get("id")) not in have:
+                current.append(item)          # appended: the live order is theirs
+                have.add(str(item.get("id")))
+        if added:
+            plan["notes"].append(f"kept this board's own {key} and added "
+                                 f"{', '.join(added)} from {source.name}")
     highest = max([int(str(c["id"]).rsplit("-", 1)[1]) for c in plan["cards"]],
                   default=0)
     wanted_next = wanted.get("next_card")
@@ -813,10 +864,6 @@ def _identity_present(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "agent", None) or os.environ.get(identity.ENV_VAR))
 
 
-def _next(agent: str | None) -> str:
-    return f"next: yamlboard ready --as {agent}" if agent else "next: yamlboard ready"
-
-
 def _dirty(st: store.Store) -> list[str]:
     """Repo-wide working-tree paths, for the checks that compare a claim to them.
 
@@ -829,25 +876,23 @@ def _dirty(st: store.Store) -> list[str]:
         return []
 
 
-def _run_op(st: store.Store, out: Out, agent: str | None, op: str,
-            args: dict) -> dict:
-    """One op, with the CLI's exit-code translation and the identity banner.
+def _translated(action: Callable[[], dict]) -> dict:
+    """Run one coordination call with this CLI's exit-code mapping applied.
 
-    The banner is written before the write, not after: an agent that discovers
-    afterwards which identity it used has already mislabelled the card.
+    Two doors ask the same rule — ``_run_op`` to write through it, ``show`` to
+    read the answer without writing — and a rule the two doors translate
+    differently is a rule with two answers, which is the bug this replaced.
+
+    ``BadRequest`` is the layer's "refused operation" — a cycle, a directory
+    passed to ``--paths``, an edge that already exists. It is exit 2, and mapping
+    it here rather than letting it escape keeps a traceback out of an agent's
+    terminal: exit 1 has to stay reserved for "the port is taken", so a crash
+    masquerading as a listen failure would send an agent hunting the wrong thing.
     """
-    if agent and not out.json:
-        print(f"  {identity.banner(agent)}", file=sys.stderr)
-    payload = {"op": op, "args": {k: v for k, v in args.items() if v is not None}}
     try:
-        result = api.apply(st, payload)["result"]
+        return action()
     except api.ClaimDenied as exc:
         raise Denied(list(exc.lines), exc.detail) from exc
-    # `BadRequest` is the layer's "refused operation" — a cycle, a directory
-    # passed to --paths, an edge that already exists. It is exit 2, and mapping it
-    # here rather than letting it escape keeps a traceback out of an agent's
-    # terminal: exit 1 has to stay reserved for "the port is taken", so a crash
-    # masquerading as a listen failure would send an agent hunting the wrong thing.
     except api.BadRequest as exc:
         raise Usage(str(exc)) from exc
     except api.NotFound as exc:
@@ -861,7 +906,19 @@ def _run_op(st: store.Store, out: Out, agent: str | None, op: str,
         raise Usage(store.describe(exc.errors)) from exc
     except store.StoreError as exc:
         raise Usage(str(exc)) from exc
-    return result
+
+
+def _run_op(st: store.Store, out: Out, agent: str | None, op: str,
+            args: dict) -> dict:
+    """One op, with the identity banner and the shared exit-code mapping.
+
+    The banner is written before the write, not after: an agent that discovers
+    afterwards which identity it used has already mislabelled the card.
+    """
+    if agent and not out.json:
+        print(f"  {identity.banner(agent)}", file=sys.stderr)
+    payload = {"op": op, "args": {k: v for k, v in args.items() if v is not None}}
+    return _translated(lambda: api.apply(st, payload)["result"])
 
 
 def _resolved_line(item: dict) -> str:
@@ -1051,6 +1108,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = store_dir(add("check", "validate the board and report conflicts"),
                       "directory containing .yamlboard/")
+    # Named, `check` stops reporting your own claimed work back to you as a
+    # collision. Unnamed — CI, a stranger — it still reports every live claim,
+    # because a gate has nobody's identity to ask with.
+    check.add_argument("--as", dest="agent", help=as_help)
     check.add_argument("--json", action="store_true")
 
     show = store_dir(add("show", "can I take this card, and if not why"),
@@ -1062,7 +1123,7 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--paths", help="globs you intend to touch, to test them first")
     show.add_argument("--json", action="store_true")
 
-    listing = store_dir(add("list", "every card, newest state first"),
+    listing = store_dir(add("list", "every card, in board order"),
                         "directory containing .yamlboard/")
     listing.add_argument("--board", help="one board only")
     listing.add_argument("--all", action="store_true", help="include archived cards")
@@ -1167,6 +1228,23 @@ VERB_FUNCTIONS: dict[str, Callable[[argparse.Namespace, Out], int]] = {
 }
 
 
+def _fail(out: Out, lines: list[str], *, prefix: str = "error: ") -> int:
+    """Report a failure once, in whichever channel the caller is reading.
+
+    ``--json`` gets one parseable document on stdout and nothing on stderr; a
+    person gets every line on stderr, the first carrying the ``error:`` prefix.
+    Either way the shape is ``error`` plus ``lines``, so a script never meets a
+    field that only appears for some failures.
+    """
+    out.data(ok=False, error=lines[0], lines=lines)
+    if out.json:
+        out.emit()
+    else:
+        for offset, line in enumerate(lines):
+            print((prefix if offset == 0 else "") + line, file=sys.stderr)
+    return EXIT_USAGE
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1192,15 +1270,18 @@ def main(argv: list[str] | None = None) -> int:
     except Usage as exc:
         # `lines`, not `str`: an identity refusal is one sentence plus the single
         # command that fixes it, and a caller reading only stderr should see both.
-        lines = getattr(exc, "lines", [str(exc)])
-        out.data(ok=False, error=lines[0], lines=lines)
-        if out.json:
-            out.emit()
-        else:
-            print(f"error: {lines[0]}", file=sys.stderr)
-            for line in lines[1:]:
-                print(line, file=sys.stderr)
-        code = EXIT_USAGE
+        code = _fail(out, getattr(exc, "lines", [str(exc)]))
+    except (ValidationError, store.StoreError, api.BadRequest, api.NotFound) as exc:
+        # A store that will not parse is a usage failure, not a crash. The read
+        # verbs (`check`, `show`, `list`, `ready`, `conflicts`) build their `Tx`
+        # outside `_run_op`, so a bad `board.yaml` — a version 1 file, a stray
+        # top-level key, one card whose prefix no board owns — escaped here as a
+        # Python traceback printed *under* the message that tells you to run
+        # `yamlboard migrate`. Worse, it exited 1, which this tool reserves for
+        # "the port is taken": an agent scripted on the codes went looking for a
+        # running server instead of reading its own files.
+        code = _fail(out, list(getattr(exc, "errors", None)) or [str(exc)],
+                     prefix="")
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         code = EXIT_INTERRUPT

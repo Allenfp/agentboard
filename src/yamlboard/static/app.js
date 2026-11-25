@@ -333,7 +333,12 @@ function movedFiles(before, state) {
     // coarser answer wins — a poll that carried a claim *and* a hand-edit of the
     // same card must still say "changed on disk", or the human is silently
     // shown somebody else's edit with no explanation of where it came from.
-    if (restSame && who !== "edit") { news.claims.push(id); news.rebuild = true; continue; }
+    // A lease-only move patches the one chip; it does not rebuild. A rebuild
+    // throws away the tile a keyboard user is standing on and the sentence
+    // another is partway through selecting, and with several agents renewing,
+    // that is every few seconds forever. `reshaped` below still rebuilds when a
+    // lease *dying* changes which tiles belong on screen.
+    if (restSame && who !== "edit") { news.claims.push(id); continue; }
     news.content.push(id);
   }
   for (const id of was.keys()) if (!now.has(id)) news.gone.push(id);   // deleted or archived
@@ -362,7 +367,14 @@ const person = (id) => people().find((p) => p.id === id) || null;
 const label = (id) => labels().find((l) => l.id === id) || null;
 const columns = (b) => (b && b.columns) || [];
 const column = (b, id) => columns(b).find((c) => c.id === id) || null;
-const allCards = (b) => (b && b.cards) || [];
+/* Every card the payload carries for this board, archived included. The server
+   keeps `archived_cards` beside `cards` because `cards` is the live population,
+   but the callers below want the truth about the board: an archived card still
+   sits in its column (deleting that column moves it), still uses its labels and
+   assignee (deleting either touches it), and is still a card. Where "live" is
+   meant, the caller says so — visibleCards filters on S.showArchived. */
+const allCards = (b) => (b ? [...(b.cards || []), ...(b.archived_cards || [])] : []);
+const liveCards = (b) => allCards(b).filter((c) => !c.archived);
 const cardById = (id) => {
   for (const b of boardList()) {
     const found = allCards(b).find((c) => c.id === id);
@@ -380,7 +392,10 @@ function visibleCards(b, columnId) {
     if (!!card.archived !== !!S.showArchived) return false;
     // The server's list, not a local guess: a card can look unclaimed here and
     // still be blocked or colliding, and offering it is how two agents end up in
-    // one file. `state === "ready"` and membership of `ready` are the same fact.
+    // one file. Membership of `ready` is the stricter reading of the two -- the
+    // four-word state vocabulary has no word for finished, so a card in a done
+    // column answers "ready" while this list leaves it out. Every "take me"
+    // accent on screen reads this list, so the filter and the tiles agree.
     if (S.readyOnly && !readyIds().has(card.id)) return false;
     if (labelId && !(card.labels || []).includes(labelId)) return false;
     if (assignee && (card.assignee || "") !== assignee) return false;
@@ -789,7 +804,7 @@ function render() {
   const current = board();
   els.subtitle.textContent = "";
   if (current) {
-    const live = allCards(current).filter((c) => !c.archived).length;
+    const live = liveCards(current).length;
     els.subtitle.append(`${current.key} · ${live} card(s)`);
     if (filtersActive() || S.showArchived) {
       const shown = columns(current).reduce((sum, c) => sum + visibleCards(current, c.id).length, 0);
@@ -825,6 +840,13 @@ function renderBoard() {
   const main = els.main;
   if (!main) return;
   const scroll = { x: main.scrollLeft, y: main.scrollTop };
+  // Whichever tile the keyboard was on. A rebuild threw the person's place away
+  // on every poll: tab through six cards, an agent renews a lease somewhere else
+  // in the store, and focus lands on <body> so the next Tab restarts from the top
+  // of the page. Scroll is carried across below; the cursor is the part a
+  // keyboard user is actually standing on.
+  const standing = main.contains(document.activeElement)
+    ? document.activeElement.closest?.("[data-id]")?.dataset.id || null : null;
   main.textContent = "";
 
   const current = board();
@@ -839,6 +861,13 @@ function renderBoard() {
 
   main.scrollLeft = scroll.x;
   main.scrollTop = scroll.y;
+  // preventScroll: focusing a tile below the fold would undo the scroll restore
+  // above, and both are the same promise -- stay where you were. A card the
+  // rebuild removed (deleted, or filtered out by the ready filter) leaves focus
+  // on <body>, which is honest: the thing it stood on is gone.
+  if (standing) {
+    main.querySelector(`[data-id="${CSS.escape(standing)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 /**
@@ -957,7 +986,7 @@ function columnHeader(current, col) {
     $("span", { class: ["col-count", over ? "over" : ""].filter(Boolean).join(" ") },
       !archived && col.wip_limit ? `${total}/${col.wip_limit}` : String(total)),
     $("button", {
-      class: "col-menu", title: "Column options",
+      class: "col-menu", title: "Column options", "aria-label": `Options for column ${col.name}`,
       onclick: (event) => openColumnMenu(event, current, col),
     }, "⋮"),
   );
@@ -1271,12 +1300,19 @@ function renderList(current) {
       tabindex: "0", "data-id": card.id,
       onclick: () => openCard(card.id),
       onkeydown: onEnter(() => openCard(card.id)),
-      class: card.archived ? "archived" : "",
+      class: [card.archived ? "archived" : ""].concat(coordClasses(card)).filter(Boolean).join(" "),
+      style: { "--claim": claimColor(card) || "" },
     },
       $("td", { class: "mono" }, card.id),
       $("td", {}, card.title),
       $("td", {}, $("span", { class: "col-tag", style: { "--col": col.color || FALLBACK_COLOR } }, col.name)),
-      $("td", {}, who ? avatar(who) : $("span", { class: "note" }, card.assignee || "—")),
+      // The claim chip, not just the assignee: an expired lease rewrites no
+      // bytes, so `assignee` still names the agent who had it, and in list view
+      // that stale avatar read as "still held" while the grid showed it red and
+      // expired. One chip, one truth, same as the tile.
+      $("td", { class: "who-cell" },
+        who ? avatar(who) : $("span", { class: "note" }, card.assignee || "—"),
+        ...(card.claim ? coordNodes(card) : [])),
       $("td", {}, card.priority && card.priority !== "none" ? $("span", { class: "prio" }, card.priority) : ""),
       // The state colours live on .due.soon / .due.over, so the cell needs the
       // .due class too - a bare "over" on the <td> matched nothing and painted
@@ -1335,7 +1371,9 @@ function openModal(title, bodyNode, buttons, wide, focusId, headExtra) {
   closePop();
   const root = document.getElementById("modal-root");
   root.hidden = false;
-  const panel = $("div", { class: "panel" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title },
+  // tabindex -1 so a rebuild whose control is gone can park focus here: the
+  // panel swallows typing and Enter, where a button nearby would act on it.
+  const panel = $("div", { class: "panel" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title, tabindex: "-1" },
     $("div", { class: "panel-head" }, $("h2", {}, title), headExtra || null,
       $("button", { class: "ghost", "aria-label": "Close", onclick: closeModal }, "×")),
     $("div", { class: "panel-body" }, bodyNode),
@@ -1352,7 +1390,15 @@ function openModal(title, bodyNode, buttons, wide, focusId, headExtra) {
   // aria-modal is a promise to a screen reader that the rest of the page is
   // gone. `inert` is the version the browser enforces: without it, Tab walks
   // straight out of the dialog and into the board behind the scrim.
+  // #toast-root is a sibling of #root and paints *above* the scrim (z 60 vs 50),
+  // so its dismiss button is clickable while a dialog that promised, via
+  // aria-modal, to have no surroundings is open. It gets `pointer-events: none`
+  // rather than `inert`: Tab can already not reach it (modalKeys computes the
+  // trap's ends from inside `dialog`), and `inert` would also drop the subtree
+  // from the accessibility tree -- muting the aria-live region that announces
+  // lease expiries, which is exactly the news a person behind a dialog needs.
   document.getElementById("root").inert = true;
+  document.getElementById("toast-root").classList.add("muted");
   const target = (focusId && panel.querySelector("#" + CSS.escape(focusId)))
     || panel.querySelector("input, textarea, select, button.primary");
   if (target) target.focus();
@@ -1387,6 +1433,7 @@ function closePanel() {
   S.openCardId = null;
   document.removeEventListener("keydown", modalKeys, true);
   document.getElementById("root").inert = false;
+  document.getElementById("toast-root").classList.remove("muted");
   // #modal-root exists only to carry the scrim. Left shown with no children it
   // is a full-screen empty layer, and it eats clicks meant for cards.
   document.getElementById("modal-root").hidden = true;
@@ -1396,7 +1443,13 @@ function closePanel() {
 function closeModal() {
   if (!dialog) return;
   const opener = closePanel();
+  // Restore the caret where the person was standing. The opener may have been
+  // removed while the dialog was up — resolving the last conflict deletes the
+  // button that opened it — so fall back to a live anchor rather than dropping
+  // focus to <body>, which strands a keyboard user with nowhere to go.
   if (opener && opener.isConnected) opener.focus();
+  else if (els.conflictButton?.isConnected) els.conflictButton.focus();
+  else els.search?.focus();
   // The poll pauses while a modal is open, so whatever happened meanwhile - a
   // Vim edit, a pull, another tab's commit - is picked up here rather than
   // whenever the next op collides with it. Cheap when nothing moved: adopt()
@@ -1426,23 +1479,27 @@ async function reloadOpenCard() {
   pendingReload = false;
   reloadingCard = true;
   const where = dialog.contains(document.activeElement) ? document.activeElement : null;
-  // title and notes are recreated each rebuild without an id, so match on class
-  const key = where?.id
-    ? "#" + CSS.escape(where.id)
-    : where?.classList.contains("doc-title") ? ".doc-title"
-    : where?.classList.contains("doc-desc") ? ".doc-desc"
-    : null;
+  // Every control that can fire an op carries an id, so this is a plain id
+  // lookup. The class-matching fallback it replaces is what let the rebuild lose
+  // the caret: title and notes were built without ids, so nothing matched,
+  // openModal focused its first input, and typing went into the card's name.
+  const key = where?.id ? "#" + CSS.escape(where.id) : null;
   const caret = where && "selectionStart" in where ? [where.selectionStart, where.selectionEnd] : null;
   // Writing a subtask or posting a comment does not touch title/notes, so any
   // text still inside the debounce window has to be committed before the
   // rebuild -- otherwise the new DOM is built from the server's older text and
   // whatever was being typed disappears.
   if (dialog.flushPending) await dialog.flushPending();
-  await openCard(S.openCardId);
+  // The id travels into openCard so the fresh panel is built with focus already
+  // on the control that fired the op. When there is nowhere to go -- Release
+  // removes itself once the card is free -- focus must not fall through to the
+  // title, which is how a rebuild turns the next keystroke into a rename; it goes
+  // to the close button instead, which swallows typing.
+  await openCard(S.openCardId, where?.id || null);
   reloadingCard = false;
-  if (!dialog || !key) return;
-  const again = dialog.querySelector(key);
-  if (!again) return;
+  if (!dialog) return;
+  const again = key ? dialog.querySelector(key) : null;
+  if (!again) { dialog.querySelector(".panel").focus(); return; }
   again.focus();
   if (caret) { try { again.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ } }
 }
@@ -1466,18 +1523,27 @@ async function openCard(cardId, focus) {
   const fields = customFields(current);
   const editable = !readOnly();
 
-  const title = $("input", { class: "doc-title", value: card.title || "", placeholder: "Untitled card", disabled: !editable });
-  const desc = $("textarea", { class: "doc-desc", rows: "5", placeholder: "Notes — stored exactly as you write it", disabled: !editable }, card.desc || "");
+  // Both carry an id because reloadOpenCard rebuilds this panel under the person
+  // typing, and it restores the caret by id. Without one the rebuild leaves them
+  // unmatched, focus falls through to openModal's first-input fallback -- the
+  // title -- and the next keystroke edits the name of the card.
+  const title = $("input", { id: "doc-title", class: "doc-title", value: card.title || "", placeholder: "Untitled card", disabled: !editable });
+  const desc = $("textarea", { id: "doc-desc", class: "doc-desc", rows: "5", placeholder: "Notes — stored exactly as you write it", disabled: !editable }, card.desc || "");
 
-  const colSelect = $("select", { disabled: readOnly() },
+  // Every control the person can act on carries a stable id. reloadOpenCard
+  // rebuilds this panel after any op -- a select change, a claim button, a
+  // subtask tick -- and finds the replacement by id. An id-less control strands
+  // focus on <body>, openModal's fallback grabs the first input (the title), and
+  // the next keystrokes overwrite the card's name.
+  const colSelect = $("select", { id: "col-select", disabled: readOnly() },
     ...columns(current).map((c) => $("option", { value: c.id, selected: c.id === card.column }, c.name)));
-  const whoSelect = $("select", { disabled: readOnly() },
+  const whoSelect = $("select", { id: "assignee-select", disabled: readOnly() },
     $("option", { value: "", selected: !card.assignee }, "Unassigned"),
     ...people().map((p) => $("option", { value: p.id, selected: p.id === card.assignee }, p.name)));
-  const prioSelect = $("select", { disabled: readOnly() },
+  const prioSelect = $("select", { id: "prio-select", disabled: readOnly() },
     ...PRIORITIES.map((p) => $("option", { value: p, selected: (card.priority || "none") === p }, p)));
-  const due = $("input", { type: "date", value: (card.due || "").slice(0, 10), disabled: readOnly() });
-  const estimate = $("input", { type: "number", min: "0", step: "1", value: card.estimate ?? "", disabled: readOnly() });
+  const due = $("input", { id: "due-input", type: "date", value: (card.due || "").slice(0, 10), disabled: readOnly() });
+  const estimate = $("input", { id: "estimate-input", type: "number", min: "0", step: "1", value: card.estimate ?? "", disabled: readOnly() });
 
   const labelPicker = $("div", { class: "pick" }, ...labels().map((def) => {
     const box = $("input", { type: "checkbox", disabled: readOnly() });
@@ -1546,7 +1612,7 @@ async function openCard(cardId, focus) {
     }, icon("link"));
     const row = $("div", { class: "row" }, open, urlInput, titleInput,
       readOnly() ? null : $("button", {
-        class: "ghost", title: "Remove link",
+        class: "ghost", title: "Remove link", "aria-label": "Remove link",
         onclick: () => { row.remove(); saveLinks(); },
       }, "×"));
     const sync = () => { open.href = safeHref(urlInput.value); };
@@ -1573,10 +1639,14 @@ async function openCard(cardId, focus) {
     const row = $("div", { class: "sub" }, box, $("span", { class: "sub-text" }, text));
     if (index !== null && !readOnly()) {
       box.addEventListener("change", async () => {
-        await send("card.subtask.toggle", { id: card.id, index, done: box.checked }, "Subtask");
+        // Same reason as `patch` below: a refused toggle must not leave a tick
+        // on a subtask the file says is unfinished.
+        if (!(await send("card.subtask.toggle", { id: card.id, index, done: box.checked }, "Subtask"))) {
+          await reloadOpenCard();
+        }
       });
       row.append($("button", {
-        class: "ghost", title: "Remove subtask",
+        class: "ghost", title: "Remove subtask", "aria-label": "Remove subtask",
         // Index-addressed like comment.delete: check the row still holds the
         // text it was built from before writing the list without it.
         onclick: async () => {
@@ -1611,11 +1681,12 @@ async function openCard(cardId, focus) {
   (card.comments || []).forEach((entry, index) => {
     commentList.append($("div", { class: "comment" },
       $("div", { class: "comment-head" },
-        entry.by ? avatar(person(entry.by)) : $("span", { class: "avatar anon" }, "·"),
-        $("span", { class: "comment-who" }, person(entry.by)?.name || "someone"),
+        (() => { const who = person(entry.by);
+          return who ? avatar(who) : $("span", { class: "avatar anon", title: `Unknown agent ${entry.by}` }, "?"); })(),
+        $("span", { class: "comment-who" }, person(entry.by)?.name || String(entry.by || "someone")),
         $("time", { datetime: String(entry.at || ""), title: String(entry.at || "") }, humanTime(entry.at)),
         readOnly() ? null : $("button", {
-          class: "ghost", title: "Delete comment",
+          class: "ghost", title: "Delete comment", "aria-label": "Delete comment",
           // The op addresses a comment by position, so if another tab posted or
           // deleted one since this row was rendered the index names somebody
           // else's note. The durable fix is an identity-keyed card.comment.delete.
@@ -1720,11 +1791,16 @@ async function openCard(cardId, focus) {
 
   /** One discrete edit: patch, and let the adopted document repaint the pill. */
   const patch = async (changes, label) => {
-    // A refused text flush (an emptied title, say) means the pill the person
-    // just moved never reached the file: rebuild from the document so it shows
-    // what the file holds rather than the edit that was declined.
+    // A refused write — an emptied title, a stale token, a denied claim — means
+    // the pill the person just moved never reached the file. Rebuild from the
+    // document so the panel shows what the file holds rather than the edit that
+    // was declined: a select left sitting on a value the server said no to is
+    // worse than no feedback, because the board is the one thing here that is
+    // supposed to be a faithful copy of the YAML.
     if (!(await flushText())) { await reloadOpenCard(); return; }
-    await send("card.update", { id: card.id, patch: changes }, label);
+    if (!(await send("card.update", { id: card.id, patch: changes }, label))) {
+      await reloadOpenCard();
+    }
   };
   colSelect.addEventListener("change", () => patch({ column: colSelect.value }, "Move"));
   whoSelect.addEventListener("change", () => patch({ assignee: whoSelect.value || null }, "Assign"));
@@ -1849,8 +1925,10 @@ function openNewCard(columnId, laneKey) {
     const result = await send("card.create", {
       board: current.id, column: colSelect.value, title: title.value.trim(), desc: desc.value,
     }, "Create card");
-    closeModal();
+    // Only close on success: a refused create (validation, stale token) must
+    // leave the typed title and notes standing, like a refused comment does.
     if (!result) return;
+    closeModal();
     // A lane row is a field value, so a card added from inside one belongs to
     // it; applyLane already turns a lane key into the right patch.
     if (laneKey) await applyLane(result.id, laneKey);
@@ -1906,8 +1984,8 @@ function renderColumnSettings(body) {
     done.checked = !!col.is_done;
     body.append($("div", { class: "setting-row" },
       $("div", { class: "order" },
-        $("button", { class: "ghost", title: "Move left", disabled: readOnly(), onclick: () => moveColumn(current, col, "left") }, "←"),
-        $("button", { class: "ghost", title: "Move right", disabled: readOnly(), onclick: () => moveColumn(current, col, "right") }, "→")),
+        $("button", { class: "ghost", title: "Move left", "aria-label": `Move ${col.name} left`, disabled: readOnly(), onclick: () => moveColumn(current, col, "left") }, "←"),
+        $("button", { class: "ghost", title: "Move right", "aria-label": `Move ${col.name} right`, disabled: readOnly(), onclick: () => moveColumn(current, col, "right") }, "→")),
       name, color, limit,
       $("label", { class: "inline" }, done, "done"),
       $("button", { class: "ghost", title: "Save", disabled: readOnly(), onclick: async () => {
@@ -2165,9 +2243,18 @@ function openCommitDialog() {
     value: `boards: update ${new Date().toISOString().slice(0, 10)}`,
   });
   const sendCommit = async () => {
+    // try/finally because `request` throws on a timeout or a dead server, and a
+    // leaked S.busy is not cosmetic: the poll loop skips while busy > 0, so one
+    // timed-out Commit freezes the board forever behind a lit busy dot.
     S.busy++; paintBusy();
-    const { status, data } = await request("POST", "/api/commit", { message: message.value.trim() });
-    S.busy--; paintBusy();
+    let status, data;
+    try {
+      ({ status, data } = await request("POST", "/api/commit", { message: message.value.trim() }));
+    } catch (error) {
+      return toast(`Could not reach the server (${error.message}).`, "error", 7000);
+    } finally {
+      S.busy--; paintBusy();
+    }
     if (status !== 200) return toast(data.error || "git commit failed", "error", 7000);
     closeModal();
     if (data.committed) toast(`Committed ${data.sha || ""} to ${data.branch || "the repo"}.`, "success", 5000);
@@ -2262,7 +2349,8 @@ document.addEventListener("keydown", (event) => {
 let leaseSkew = 0;
 
 /** Every card in a payload, whichever board it lives on. */
-const payloadCards = (state) => ((state || {}).doc?.boards || []).flatMap((b) => b.cards || []);
+const payloadCards = (state) => ((state || {}).doc?.boards || [])
+  .flatMap((b) => [...(b.cards || []), ...(b.archived_cards || [])]);
 
 /**
  * A YAML stamp as epoch milliseconds, or null for a value that is not one.
@@ -2390,7 +2478,13 @@ const coordNodes = (card) => [blockerNode(card), claimNode(card)].filter(Boolean
 const coordClasses = (card) => [
   card.live ? "claimed" : "",
   card.state === "blocked" ? "blocked" : "",
-  card.state === "ready" && !S.showArchived ? "ready-look" : "",
+  // The server's `ready` list, not `state === "ready"`: a finished card has no
+  // claim and no open blocker, so the four-word vocabulary still calls it ready,
+  // while the list -- what `yamlboard ready` prints and the ready filter filters
+  // by -- leaves it out. Accenting shipped work as takeable is how an agent gets
+  // told to reopen it. Same source as the filter and the repaint, so the three
+  // cannot disagree; see the note at visibleCards.
+  readyIds().has(card.id) && !S.showArchived ? "ready-look" : "",
   card.overlaps ? "overlaps" : "",
 ];
 
@@ -2416,6 +2510,12 @@ let leaseTimer = null;
 function startLeaseTicker() {
   if (leaseTimer) return;   // "Try again" must not stack tickers
   leaseTimer = setInterval(paintLeases, 1000);
+  // The tick pauses while hidden, so the first number a returning reader meets
+  // is the one frozen minutes ago. Repaint on the frame they come back, rather
+  // than up to a second later (board-ui: "matches the true remaining time").
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") paintLeases();
+  });
 }
 
 function paintLeases() {
@@ -2426,8 +2526,12 @@ function paintLeases() {
     if (!Number.isFinite(deadline)) continue;
     const left = Math.max(0, (deadline - now) / 1000);   // clamped: never negative
     const span = Number(node.dataset.span) || 0;
-    if (node.$text) node.$text.nodeValue = left <= 0 ? "expired" : `${humanLeft(left)} left`;
-    node.classList.toggle("gone", left <= 0);
+    // `0s left`, never "expired": only the payload may call a claim expired. A
+    // local clock reaching zero first would put error red on a lease its owner
+    // renewed two seconds ago, and that red chip is exactly what tells a human
+    // they may take the card — the same reason the expiry toast waits for the
+    // server. `low` still escalates it, and the next payload paints the truth.
+    if (node.$text) node.$text.nodeValue = `${humanLeft(left)} left`;
     // 25% of *this* claim's own TTL, not a hard-coded minute count: a 30s lease
     // and a 24h refactor card do not run out the same way.
     node.classList.toggle("low", left <= 0 || (span > 0 && left <= span * 0.25));
@@ -2542,6 +2646,7 @@ function coordSection(card) {
      buttons, and a paths box rebuilt with them would silently discard whatever
      the person had typed into it. */
   const paths = $("input", {
+    id: "claim-paths",
     type: "text", placeholder: "src/api/**, docs/notes.md", size: "26",
     "aria-label": "Paths this work will touch",
     title: "Comma-separated globs. A directory pattern needs /** on the end.",
@@ -2563,6 +2668,7 @@ function coordSection(card) {
             : "Nobody holds this card. Claim it before editing anything it covers.");
     const clashes = clashFor(card.id);
     const who = $("select", {
+      id: "claim-agent",
       "aria-label": "Claim this card as",
       onchange: (event) => {
         // One identity, persisted exactly like the toolbar's. Claim, renew and
@@ -2573,12 +2679,17 @@ function coordSection(card) {
         S.agent = event.target.value;
         savePref("yb.agent", S.agent);
         if (els.agentSelect) els.agentSelect.value = S.agent;
-        paint();
+        paint(true);
       },
     }, ...people().map((p) => $("option", { value: p.id, selected: p.id === agent }, p.name)));
     const split = () => paths.value.split(",").map((p) => p.trim()).filter(Boolean);
+    // Ids, not positions: these are the controls that fire an op, and the op
+    // rebuilds the modal around them. reloadOpenCard puts focus back on the
+    // button that was pressed; without an id it lands on the title field, and
+    // the keystroke after "Renew" renames the card.
     const button = (label, kind, onclick, title) => $(
-      "button", { class: kind, disabled: readOnly() || !people().length, title, onclick }, label);
+      "button", { id: "coord-" + label.toLowerCase().replace(/[^a-z]+/g, "-"),
+        class: kind, disabled: readOnly() || !people().length, title, onclick }, label);
     const nobody = !people().length;
     const row = $("div", { class: "claim-row" },
       nobody ? $("span", { class: "note" }, "add a person in Settings (s) before claiming") : who,

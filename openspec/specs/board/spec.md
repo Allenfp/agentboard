@@ -100,6 +100,10 @@ Every write SHALL carry a token, an opaque stamp of the exact bytes of the file 
 - **WHEN** a card file is edited outside the app and a writer then posts a change based on the pre-edit bytes
 - **THEN** that write is refused and the hand edit survives
 
+#### Scenario: A deletion is protected
+- **WHEN** a card file is removed outside the app and a writer then posts a change based on the bytes it read
+- **THEN** that write is refused and the card stays deleted, rather than being rewritten from the stale snapshot
+
 ### Requirement: The browser never decides
 Every interaction SHALL be an op posted to `/api/apply {op,args,tokens}`, where
 `tokens` names each file the client read (`"board"` plus every card id); the

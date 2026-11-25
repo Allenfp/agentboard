@@ -140,6 +140,19 @@ class Tx:
                 return handle.doc
         return self._extra.get(card_id)
 
+    def source_of(self, card: dict) -> Any | None:
+        """The file this exact document was read from, or None if it is new.
+
+        Identity, not id: a merged store can hold two documents that both claim
+        `id: WEB-9`, and the one that came from `cards/` may be on its way to
+        `archive/`. `write_card` needs the origin to tell a card moving between
+        directories from a card landing on top of somebody else's file.
+        """
+        for handle in self.snapshot.all_cards():
+            if handle.doc is card:
+                return handle.path
+        return None
+
     def is_archived(self, card_id: str) -> bool:
         for handle in self.snapshot.archived:
             if handle.doc.get("id") == card_id:
@@ -204,15 +217,23 @@ class Tx:
         files the caller named a token for are checked: an agent working straight
         from the files has no token, and inventing one would refuse its write for
         a race it could see for itself.
+
+        Each token is compared with the file the document was *read* from, not
+        with wherever that id happens to live now. ``locate`` answers the second
+        question, and it is the wrong one both ways: a file deleted during the
+        race window answers None, so nothing is checked and the write resurrects a
+        card somebody deliberately removed; and a card whose ``id:`` disagrees
+        with its filename finds the *other* file, refusing a clean write over
+        bytes that never moved while the real origin passes unexamined.
         """
+        targets: list[tuple[Any, str]] = []
+        if self.board_dirty:
+            targets.append((self.store.board_path, "board"))
+        for card_id, doc in self._dirty_cards.items():
+            origin = self.source_of(doc)
+            if origin is not None:            # a create cannot have moved
+                targets.append((origin, card_id))
         stale: list[str] = []
-        targets = [(self.store.board_path, "board")] if self.board_dirty else []
-        for card_id in {**self._extra, **self._dirty_cards}:
-            if card_id in self._extra:
-                continue                      # a create cannot have moved
-            path = self.store.locate(card_id)
-            if path is not None:
-                targets.append((path, card_id))
         for path, key in targets:
             want = self.tokens.get(key)
             if want is None:
@@ -249,12 +270,32 @@ class Tx:
             stale = self._stale()
             if stale:
                 raise Conflict(stale)
+            # A created card is the one write `_stale()` cannot see: there is no
+            # earlier token for a file that did not exist when the caller read
+            # the store, and the CLI has no token to offer anyway. So the id is
+            # minted from a listing taken outside this lock, and two writers in
+            # one clone mint the same one — the second overwrites the first at
+            # exit 0 and a card is gone with nothing to show it was ever there.
+            # Nothing legitimate can already be on disk at this point:
+            # `next_card_id` skips every id the caller listed, and `migrate`
+            # refuses an id clash before it writes. A name found here arrived
+            # after this transaction opened, which is the same fact a stale
+            # token states, so it gets the same answer.
+            jumped = [card_id for card_id in sorted(self._extra)
+                      if card_id not in self._removed
+                      and self.store.card_path(
+                          card_id,
+                          archived=bool(self._extra[card_id].get("archived")),
+                      ).is_file()]
+            if jumped:
+                raise Conflict(jumped)
             for card_id in sorted(self._removed - renamed_from):
                 self.store.remove_card(card_id)
                 written.append(card_id)
             for card_id, card in sorted({**self._extra, **self._dirty_cards}.items()):
-                self.store.write_card(card, board=board)
-                written.append(card_id)
+                # `source` is what lets a card move cards-dir <-> archive/ while
+                # still refusing to land on a merged stranger of the same name.
+                self.store.write_card(card, board=board, source=self.source_of(card))
             # last, so a rename is never a moment where the card exists nowhere:
             # the brief overlap of two files is recoverable, an empty gap is not.
             for old, new in self._renamed:
@@ -522,9 +563,20 @@ def _patterns(value: Any) -> list[str]:
 
 
 def _holders(tx: Tx, card_id: str) -> list[dict]:
-    """Live claims on *other* cards — the set a new claim must not collide with."""
+    """Live claims on *other* cards — the set a new claim must not collide with.
+
+    Scanned over ``all_cards()``, archived included, because ``conflicts`` does
+    exactly that: a claim that reached ``archive/`` by merge or hand edit is
+    reported as an overlap, so if this arbiter ignored it, ``claim`` would answer
+    exit 0 with a fresh lease and hand the caller a board whose own ``check``
+    then fails on the collision it just authorised. The arbiter and the reporter
+    are the only two answers to "who holds this", and disagreeing is the one
+    thing this layer exists to prevent. Expiry still bounds the damage: an
+    archived card's stale claim stops fencing once its TTL runs out, and
+    ``card.archive`` releases the claim on the way in.
+    """
     out: list[dict] = []
-    for card in tx.cards():
+    for card in tx.all_cards():
         if card.get("id") == card_id:
             continue
         claim = model.claim_of(card)
@@ -568,12 +620,8 @@ def state_of(tx: Tx, card: dict, agent: str | None = None) -> str:
     claim = model.claim_of(card)
     if claim and model.claim_live(claim):
         return "yours" if agent and claim.get("agent") == agent else "taken"
-    edges = model.dependencies(tx.cards())
-    done = {
-        str(c.get("id")) for c in tx.cards()
-        if model.is_done_column(_board_of(tx, str(c.get("id") or "")), str(c.get("column") or ""))
-    }
-    if model.blocked_by_open(edges, str(card.get("id") or ""), done):
+    edges = model.dependencies(tx.all_cards())
+    if model.blocked_by_open(edges, str(card.get("id") or ""), _settled_ids(tx)):
         return "blocked"
     return "ready"
 
@@ -597,12 +645,8 @@ def why_not_ready(tx: Tx, card: dict, agent: str | None = None,
             lines.append(f"{card_id} is taken — {claim.get('agent')} holds it until "
                          f"{model.iso(claim.get('expires'))} "
                          f"({model.humanize(model.ttl_left(claim))} left)")
-    edges = model.dependencies(tx.cards())
-    done = {
-        str(c.get("id")) for c in tx.cards()
-        if model.is_done_column(_board_of(tx, str(c.get("id") or "")), str(c.get("column") or ""))
-    }
-    for blocker in model.blocked_by_open(edges, card_id, done):
+    edges = model.dependencies(tx.all_cards())
+    for blocker in model.blocked_by_open(edges, card_id, _settled_ids(tx)):
         lines.append(f"{card_id} also waits on {blocker} (still open)")
     # The card's own claim only fences anything while it is *live*: during a
     # renewal the caller's footprint includes the paths already on the card. Once
@@ -618,19 +662,25 @@ def why_not_ready(tx: Tx, card: dict, agent: str | None = None,
 
 
 def ready(tx: Tx, agent: str | None = None, patterns: list[str] | None = None) -> list[dict]:
-    """Takeable cards: not finished, unclaimed, unblocked, path-free."""
+    """Takeable cards: not finished, unclaimed, unblocked, path-free, and owned.
+
+    ``state_of`` answers "who holds this, and does anything it waits on remain
+    open"; this answers "may an agent take it", which is the narrower question —
+    so a finished card is excluded below rather than becoming a fifth state, and
+    so is a card no board owns: claiming one is refused by validation, and
+    offering it is a dead end dressed up as available work.
+    """
     out: list[dict] = []
     for card in tx.cards():
+        card_id = str(card.get("id") or "")
         # A card sitting in a done column is finished work. It has no claim and
         # no open blocker, so the state test below would call it ``ready`` and an
-        # agent would reopen something already merged. Filtering here, rather than
-        # inventing a fifth state, keeps the four-word vocabulary the spec pins
-        # and keeps ``ready`` membership and ``state == "ready"`` the same fact.
-        if _is_done(tx, card):
+        # agent would reopen something already merged.
+        if _is_done(tx, card) or model.board_for_card(tx.doc, card_id) is None:
             continue
         if state_of(tx, card, agent) != "ready":
             continue
-        if patterns and _collisions(tx, str(card.get("id") or ""), patterns):
+        if patterns and _collisions(tx, card_id, patterns):
             continue
         out.append(card)
     # ``reversed`` already makes urgent the smallest rank, so the key is the
@@ -736,12 +786,25 @@ def _show(path: Any) -> str:
         return Path(path).name
 
 
-def conflicts(tx: Tx, dirty: list[str] | None = None) -> list[dict]:
+def conflicts(tx: Tx, dirty: list[str] | None = None,
+              *, as_agent: str | None = None) -> list[dict]:
     """Overlaps git could not see, reported without writing anything.
 
     Detection never mutates: the winner is derived from data already on disk, so
     two clones asking independently get the same answer, and a report cannot
     become a silent edit of somebody else's claim.
+
+    ``as_agent`` is whoever is asking, and it changes the meaning of the
+    dirty-tree half of the answer. A modified file cannot say who modified it, so
+    a claim matching the working tree is only a collision when that tree is *not*
+    the claim's own progress — the spec's phrase is "modified by other work".
+    Asked as ``ada``, ada's live claims drop out of that check: she owns those
+    paths, and the edits in them are the work the claim was taken to do. Asked
+    with no identity nothing drops, because the asker is a third party — CI, or
+    the browser — for whom every live claim is somebody else's. Without this the
+    everyday case is a permanent red: `claim X --paths 'src/api/**'`, edit
+    `src/api/routes.py`, and `check` fails CI with a conflict no `--resolve` can
+    clear, because the "other work" is the claimant's own.
     """
     found: list[dict] = []
     live = [
@@ -797,6 +860,9 @@ def conflicts(tx: Tx, dirty: list[str] | None = None) -> list[dict]:
 
     if dirty:
         for holder in live:
+            # The asker's own claims are their own progress, not a collision.
+            if as_agent and holder["claim"].get("agent") == as_agent:
+                continue
             hits: list[str] = []
             files: list[str] = []
             for mine in (holder["claim"].get("paths") or []):
@@ -850,10 +916,17 @@ def _rank(left: dict, right: dict) -> tuple[dict, dict]:
     Deterministic so every clone names the same winner without talking to each
     other, which is the only arbitration available between two machines that
     merged cleanly.
+
+    Through :func:`model.instant`, not the ISO text. Validation accepts a naive
+    or an aware stamp, and comparing the two as text ranks ``07:00`` (local, so
+    15:00 UTC) as earlier than ``12:00+00:00``: the agent who really started
+    later keeps the card and the one who started first is told to stand down.
+    Every clone picks the same winner either way -- only one of them is right.
     """
-    def key(item: dict) -> tuple[str, str]:
+    def key(item: dict) -> tuple[float, str]:
         claim = item["claim"]
-        return (str(model.iso(claim.get("at")) or ""), str(claim.get("agent") or ""))
+        taken = model.instant(claim.get("at"))
+        return (taken.timestamp() if taken else 0.0, str(claim.get("agent") or ""))
     a, b = key(left), key(right)
     return (left, right) if a <= b else (right, left)
 
@@ -862,17 +935,27 @@ def _rank(left: dict, right: dict) -> tuple[dict, dict]:
 # claims
 # --------------------------------------------------------------------------- #
 
-def claim_create(tx: Tx, args: dict) -> dict:
-    """Take a card for a bounded time, declaring the paths the work will touch.
+def take_decision(tx: Tx, card: dict, agent: str | None,
+                  paths: Any = None) -> dict:
+    """Decide whether ``agent`` may take ``card`` for ``paths`` — the whole rule.
 
-    Three refusals, each actionable: the card is held, a path is spoken for, the
-    card is blocked. All the reasons are reported at once — see
-    :func:`why_not_ready`.
+    ``claim.create`` writes on top of this answer and ``show`` prints it, which is
+    the only way a pre-flight and the write it predicts can agree. ``show`` used to
+    keep its own copy of the rule and drifted: for a card the caller already holds,
+    ``claim`` answers exit 0 with "nothing written" while ``show`` answered exit 3
+    with "pick other work" — an agent that trusted the cheap pre-flight walked away
+    from work it was mid-edit on, the one action that loses the card for real.
+
+    Nothing here writes. The dict returned is what ``claim.create`` would return, so
+    "already yours" and "go ahead" stay two different answers, and ``show`` can say
+    which one it got without re-deriving it.
+
+    Raises:
+        BadRequest: a ``--paths`` value the store cannot accept.
+        ClaimDenied: not this caller's to take, with every reason at once.
     """
-    card_id = str(_need(args, "id"))
-    card = tx.card(card_id)
-    agent = _person_arg(tx, args, "agent")
-    patterns = _patterns(args.get("paths"))
+    card_id = str(card.get("id") or "?")
+    patterns = _patterns(paths)
     for pattern in patterns:
         if model.pattern_is_loose(pattern, tx.store.root.parent):
             raise BadRequest(
@@ -880,14 +963,70 @@ def claim_create(tx: Tx, args: dict) -> dict:
                 f"under it. Name the files, or write {pattern.rstrip('/')}/**"
             )
 
+    # Work that is over is not offered to anybody. ``ready`` has left these cards
+    # out all along, and the UI paints its "take me" accent from that list, but
+    # ``claim`` took them anyway. A lease on a done or archived card is the worst
+    # combination: invisible, because no view lists the card, yet it fences those
+    # paths off the board for a full TTL — the exact blockage this layer exists to
+    # make visible — and it re-opens work somebody already retired. Each refusal
+    # names the command that genuinely reopens the card, rather than telling the
+    # reader to go find other work when one command away is the real decision.
+    if _is_done(tx, card):
+        board = model.board_for_card(tx.doc, card_id)
+        column = str(card.get("column") or "")
+        named = model.find_column(board, column) if board else None
+        if named is not None:
+            column = str(named.get("name") or column)
+        raise ClaimDenied(
+            [f"{card_id} is finished work — it sits in {column!r}, a done column",
+             f"if it is not finished after all, move it out first: "
+             f"yamlboard done {card_id} --column <where it belongs>",
+             _next(tx, agent)],
+            {"reason": "finished", "card": card_id, "column": column},
+        )
+    if tx.is_archived(card_id) or card.get("archived"):
+        raise ClaimDenied(
+            [f"{card_id} is archived — retired work, kept for its history",
+             "unarchiving it is a deliberate act with no command line equivalent: "
+             "do it in the card panel, and it is offered like any other card",
+             _next(tx, agent)],
+            {"reason": "archived", "card": card_id},
+        )
+
     existing = model.claim_of(card)
     if existing and model.claim_live(existing):
-        if existing.get("agent") == agent and _covers(existing.get("paths"), patterns):
+        mine = existing.get("agent") == agent
+        if mine and _covers(existing.get("paths"), patterns):
             return {"id": card_id, "agent": agent, "unchanged": True,
                     "expires": model.iso(existing.get("expires"))}
+        # Widening stays refused (``test_widening_your_own_claim_is_a_denial...``):
+        # a footprint is a promise the board was already navigated against. The
+        # defect was the *shape* of the refusal, which was indistinguishable from
+        # losing the card to a stranger — exit 3 with ``reason: "taken"`` and
+        # ``next: yamlboard ready``, under a first line reading "WEB-1 is already
+        # yours". A caller scripted on ``reason`` walked away from a card it was
+        # mid-edit on. Still exit 3, because the card is not takeable either way;
+        # a different reason and a different next step, because what to do is not
+        # the same thing.
+        lines = why_not_ready(tx, card, agent, patterns)
+        asked = [p for p in patterns
+                 if not any(model.patterns_overlap(p, have)
+                            for have in (existing.get("paths") or []))]
+        if mine and asked:
+            lines[0] = (f"{card_id} is already yours until "
+                        f"{model.iso(existing.get('expires'))} "
+                        f"({model.humanize(model.ttl_left(existing))} left), "
+                        f"but not for {', '.join(asked)}")
+            lines.append("growing a claim you already hold is not yours alone to "
+                         "do — the board was navigated against the first footprint")
+            lines.append(f"next: yamlboard renew {card_id} --as {agent}"
+                         "   # the same paths, longer")
+            raise ClaimDenied(lines,
+                              {"reason": "widens", "holder": agent,
+                               "expires": model.iso(existing.get("expires")),
+                               "held": list(existing.get("paths") or [])})
         raise ClaimDenied(
-            why_not_ready(tx, card, agent, patterns)
-            + [_next(tx, agent)],
+            lines + [_next(tx, agent)],
             {"reason": "taken", "holder": existing.get("agent"),
              "expires": model.iso(existing.get("expires"))},
         )
@@ -896,6 +1035,25 @@ def claim_create(tx: Tx, args: dict) -> dict:
     if blockers:
         raise ClaimDenied(blockers + [_next(tx, agent)],
                           {"reason": "ready_check", "card": card_id})
+    return {"id": card_id, "agent": agent, "takeable": True}
+
+
+def claim_create(tx: Tx, args: dict) -> dict:
+    """Take a card for a bounded time, declaring the paths the work will touch.
+
+    Three refusals, each actionable: the card is held, a path is spoken for, the
+    card is blocked. :func:`take_decision` owns those rules and raises through
+    here untouched; this function only writes the lease its answer allowed.
+    """
+    card_id = str(_need(args, "id"))
+    card = tx.card(card_id)
+    agent = _person_arg(tx, args, "agent")
+    decision = take_decision(tx, card, agent, args.get("paths"))
+    if decision.get("unchanged"):
+        return decision
+
+    patterns = _patterns(args.get("paths"))
+    existing = model.claim_of(card)
 
     board = _board_of(tx, card_id)
     seconds = model.lease_seconds(args.get("ttl"), board)
@@ -941,6 +1099,23 @@ def claim_renew(tx: Tx, args: dict) -> dict:
         raise ClaimDenied(
             [f"{card_id} is held by {claim.get('agent')}, not {agent}", _next(tx, agent)],
             {"reason": "not_yours"},
+        )
+    if claim.get("overridden_by"):
+        # The card still carries this agent's name, so the two checks above let
+        # it through, and renewal used to answer ``retaken: true`` with a longer
+        # expiry — while ``overridden_by`` stayed set, which is exactly what
+        # ``claim_live`` reads to call the claim inert. So the loser of a
+        # resolved overlap walked away believing it held the card, and the board
+        # kept offering that card as ``ready`` to everyone else. Overriding is a
+        # human adjudication (``conflicts --resolve``); renewing is not how you
+        # appeal it, and only a fresh ``claim`` — which writes a whole new claim
+        # mapping — can take the card back, after the winner's lease has run out.
+        raise ClaimDenied(
+            [f"{card_id} was resolved against you — {claim['overridden_by']} won "
+             f"that overlap, so this claim is spent",
+             f"next: yamlboard ready --as {agent}" if agent
+             else "next: yamlboard ready"],
+            {"reason": "overridden", "winner": claim["overridden_by"]},
         )
     board = _board_of(tx, card_id)
     seconds = model.lease_seconds(args.get("ttl"), board)
@@ -1021,8 +1196,8 @@ def _repair_misnames(tx: Tx, wanted: str) -> tuple[list[dict], list[str]]:
             for other in cards:
                 blockers = other.doc.get("blocked_by")
                 if model.is_list(blockers) and ident in blockers:
-                    other.doc["blocked_by"] = [stem if b == ident else b
-                                               for b in blockers]
+                    model.set_list(other.doc, "card", "blocked_by",
+                                   [stem if b == ident else b for b in blockers])
                     repointed += 1
                     tx.dirty(other.doc)
         tx.dirty(card)
@@ -1401,6 +1576,19 @@ def _unblock_everyone(tx: Tx, gone: str) -> None:
 
 
 def card_archive(tx: Tx, args: dict) -> dict:
+    """Flag the card retired; ``flush`` moves the file.
+
+    Nothing is renamed here. ``apply``'s contract is that raising anything leaves
+    the store untouched, and this op used to call ``store.archive()`` — an
+    ``os.replace`` — on the way out, before ``flush`` had validated the store or
+    checked a single token. So an unrelated invalid card, or a stale browser
+    token, failed the request with 409/422 *after* ``cards/ID.yaml`` had already
+    become ``archive/ID.yaml`` with ``archived: false`` still inside it: a card
+    the board renders live from a directory nothing treats as live. The flag is
+    the whole mechanism — ``write_card`` routes by it, proves the destination is
+    not somebody else's card, and unlinks the origin, all inside the one locked
+    window that writes ``board.yaml`` last.
+    """
     card_id = str(_need(args, "id"))
     card = tx.card(card_id)
     wanted = _bool_arg(args, "archived", True)
@@ -1409,7 +1597,7 @@ def card_archive(tx: Tx, args: dict) -> dict:
         _release_here(tx, card, "archived")
     tx.dirty(card)
     return {"id": card_id, "archived": wanted,
-            "moved": tx.store.archive(card_id).name if wanted else None}
+            "moved": f"{card_id}.yaml" if wanted else None}
 
 
 def card_unarchive(tx: Tx, args: dict) -> dict:
@@ -1417,7 +1605,7 @@ def card_unarchive(tx: Tx, args: dict) -> dict:
     card = tx.card(card_id)
     model.set_field(card, "card", "archived", False)
     tx.dirty(card)
-    return {"id": card_id, "archived": False}
+    return {"id": card_id, "archived": False, "moved": f"{card_id}.yaml"}
 
 
 def card_done(tx: Tx, args: dict) -> dict:
@@ -1860,7 +2048,17 @@ def person_delete(tx: Tx, args: dict) -> dict:
         if claim and claim.get("agent") == person["id"]:
             card.pop("claim", None)
             touched = True
-        for key in ("preempted", "overridden_by", "released_by"):
+        # ``preempted`` and ``overridden_by`` live on the claim; ``released_by``
+        # is a *card* key (see ``model.CARD_KEYS``) and is validated against the
+        # people list, so leaving it behind makes the person permanently
+        # undeletable: the scrub used to look for it on the claim, never found
+        # it, and the validation that refuses to delete a still-referenced person
+        # then had nothing to clear it. Once anyone force-releases a claim, that
+        # identity is stuck on the board forever, with no repair command.
+        if card.get("released_by") == person["id"]:
+            card.pop("released_by", None)
+            touched = True
+        for key in ("preempted", "overridden_by"):
             if claim is not None and claim.get(key) == person["id"]:
                 claim.pop(key, None)
                 touched = True
@@ -2055,8 +2253,8 @@ def summary(tx: Tx, *, dirty: list[str] | None = None,
     """
     doc = tx.doc
     edges = _edges(tx)
-    done = {str(c.get("id")) for c in tx.all_cards() if _is_done(tx, c)}
-    reports = conflicts(tx, dirty)
+    done = _settled_ids(tx)
+    reports = conflicts(tx, dirty, as_agent=agent)
     overlapping = {
         who for report in reports if report["kind"] == "overlap"
         for who in (report["winner"]["card"], report["loser"]["card"])
@@ -2064,6 +2262,14 @@ def summary(tx: Tx, *, dirty: list[str] | None = None,
 
     json_doc = model.jsonable(doc)
     by_board: dict[str, list] = {str(b.get("id")): [] for b in model.boards(json_doc)}
+    # Archived cards ride alongside ``cards`` rather than inside it: ``cards`` is
+    # the population the grid, the counts, the drag targets and ``ready`` are all
+    # computed from, and ``test_archiving_moves_the_file...`` pins them out of it.
+    # The archive view still needs the entries themselves — holder, countdown,
+    # the works — and the top-level ``archived`` list is only ids, so without a
+    # payload that carries the cards the `a` toggle can never render anything and
+    # ``card.unarchive`` is unreachable.
+    shelved: dict[str, list] = {str(b.get("id")): [] for b in model.boards(json_doc)}
     archived: list[str] = []
     for card in tx.all_cards():
         card_id = str(card.get("id") or "")
@@ -2081,6 +2287,10 @@ def summary(tx: Tx, *, dirty: list[str] | None = None,
             entry["claim"]["span"] = model.claim_span(claim)
         if entry["archived"]:
             archived.append(card_id)
+            home = model.board_for_card(doc, card_id)
+            shelf = shelved.get(str(home.get("id")) if home else "")
+            if shelf is not None:
+                shelf.append(entry)
             continue
         home = model.board_for_card(doc, card_id)
         bucket = by_board.get(str(home.get("id")) if home else "")
@@ -2088,8 +2298,11 @@ def summary(tx: Tx, *, dirty: list[str] | None = None,
             bucket.append(entry)
     for bucket in by_board.values():
         bucket.sort(key=lambda c: (float(c.get("order") or 0), str(c.get("id"))))
+    for bucket in shelved.values():
+        bucket.sort(key=lambda c: (float(c.get("order") or 0), str(c.get("id"))))
     for board in model.boards(json_doc):
         board["cards"] = by_board.get(str(board.get("id")), [])
+        board["archived_cards"] = shelved.get(str(board.get("id")), [])
 
     agents: dict[str, dict] = {}
     for card in tx.all_cards():
@@ -2130,6 +2343,37 @@ def tokens_of(tx: Tx) -> dict[str, str]:
 def _is_done(tx: Tx, card: dict) -> bool:
     board = model.board_for_card(tx.doc, str(card.get("id") or ""))
     return bool(board and model.is_done_column(board, str(card.get("column") or "")))
+
+
+def _settled_ids(tx: Tx) -> set[str]:
+    """Card ids that can no longer be worked on: in a done column, or retired.
+
+    One helper for the four surfaces that answer "is this blocker still open" —
+    ``state_of``, ``why_not_ready``, ``summary`` and the CLI's card view — which
+    is the whole point of it. They previously built the set three different ways,
+    and the two that scanned live cards only kept a dependent ``blocked`` on a
+    blocker nobody could ever finish, because archiving that blocker left the
+    edge intact while taking the card out of circulation. There is no repair for
+    that: ``conflicts --resolve`` settles claims and names, never edges.
+
+    Retirement settles an edge rather than deleting it, so ``card.unarchive``
+    restores the dependency exactly as it was and archiving stays the one-file
+    rename git is meant to see as a move.
+
+    Scanned over ``all_cards()`` through the tolerant ``_is_done`` rather than a
+    ``_board_of`` comprehension: a card whose prefix no board owns (a merged
+    ``cards/OPS-1.yaml`` from a repo whose OPS board was deleted) has no home
+    column, and asking for one raised inside a loop that runs for every card —
+    one orphan file bricked ``show``, ``ready`` and ``check`` wholesale.
+    """
+    settled: set[str] = set()
+    for card in tx.all_cards():
+        card_id = str(card.get("id") or "")
+        if not card_id:
+            continue
+        if tx.is_archived(card_id) or card.get("archived") or _is_done(tx, card):
+            settled.add(card_id)
+    return settled
 
 
 # --------------------------------------------------------------------------- #

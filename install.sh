@@ -53,7 +53,7 @@ cat <<EONEXT
     yamlboard serve
 
   ...or play with the demo store - cards, live claims and one path conflict
-  reported by `yamlboard conflicts`. It is a directory now, not one file, so
+  reported by \`yamlboard conflicts\`. It is a directory now, not one file, so
   it is copied after a shallow clone instead of fetched by curl:
 
     git clone --depth 1 ${REPO} /tmp/yamlboard-demo

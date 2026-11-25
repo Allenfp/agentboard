@@ -9,11 +9,20 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      # v7 is the highest tag this action publishes: it ships v10.0.0, v10.4.0
+      # and so on, but no bare `v10`, so `@v10` fails to resolve at checkout
+      # time. v7 is the one that runs on node24; v6 is still node20, which
+      # GitHub is retiring.
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          # The floor `pyproject.toml` advertises, not whatever uv happens to
+          # fetch. One interpreter meant a 3.12+-only stdlib call (`itertools.
+          # batched`, `Path.walk`) would ship green on the version uv happened
+          # to fetch, and fail for everyone else.
+          python-version: "3.11"
 
       # `--frozen`, not a fresh resolve: a workflow that re-resolves dependencies
       # passes on the day the lock file is stale and fails locally, which is the

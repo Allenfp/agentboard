@@ -225,6 +225,38 @@ class TestFlushIsAtomic(Ops):
         self.assertEqual(self.new_card("with ticket", fields={"ticket": "T-1"})[-1],
                          str(counter))
 
+    def test_two_writers_minting_one_id_do_not_overwrite_each_other(self) -> None:
+        """The one write a stale token cannot catch, so `flush` catches it.
+
+        `_stale()` compares the bytes of files the caller read. A created card has
+        no earlier bytes, and the CLI has no token to offer at all, so both
+        writers mint the same id from the listing each took on opening — and
+        until this check the second `write_card` simply replaced the first at exit
+        0. The lost card leaves no trace: no conflict report, no second file, no
+        error in any log. Two agents creating in one clone is the ordinary case,
+        not a race worth losing.
+        """
+        mine = api.Tx(self.store)
+        theirs = api.Tx(self.store)          # both opened before either wrote
+        first = api.OPS["card.create"](mine, {"board": "web", "title": "Ada's work"})
+        mine.flush()
+        second = api.OPS["card.create"](theirs, {"board": "web", "title": "Ben's work"})
+        self.assertEqual(first["id"], second["id"],
+                         "the fixture depends on both minting the same number")
+
+        with self.assertRaises(api.Conflict) as caught:
+            theirs.flush()
+        self.assertEqual(caught.exception.paths, [first["id"]])
+        self.assertEqual(self.card(first["id"])["title"], "Ada's work",
+                         "the card already on disk must survive the collision")
+        self.assertEqual(len(list(self.store.cards_dir.glob("*.yaml"))), 1)
+        self.no_temp_files()
+
+        # and the loser, told to re-read, then succeeds
+        retried = self.new_card("Ben's work, retried")
+        self.assertEqual(sorted(self.card(c)["title"] for c in ("WEB-1", retried)),
+                         ["Ada's work", "Ben's work, retried"])
+
     def test_a_malformed_payload_is_refused_before_the_store_is_opened(self) -> None:
         before = self.files()
         for payload in ({}, {"op": 42}, {"op": "card.frobnicate"},
@@ -264,9 +296,6 @@ class TestPerFileTokens(Ops):
             self.card_text(card_id).replace("title: One", "title: hand edited"),
             encoding="utf-8")
 
-        caught = self.expect(api.Conflict, "claim.create", id=card_id, agent="ada",
-                             tokens={"WEB-1": "dead-beef"}) if False else None
-        del caught
         with self.assertRaises(api.Conflict) as caught:
             api.apply(self.store, {"op": "claim.create",
                                    "args": {"id": card_id, "agent": "ada"}},
@@ -355,6 +384,28 @@ class TestPerFileTokens(Ops):
         self.assertEqual(tokens[card_id], f"{stamp[0]:x}-{stamp[1]:x}")
         self.assertTrue(self.claim(card_id, "ada", "src/a.py",
                                    tokens={card_id: tokens[card_id]})["expires"])
+
+    def test_a_file_deleted_under_the_token_is_not_written_back(self) -> None:
+        """A deletion is a change, so it must cost the write like an edit does.
+
+        The token check used to look the card up by id on the live filesystem,
+        and a deleted card answers "no such file" -- which read as nothing to
+        check. The write then went ahead and recreated the card from the stale
+        snapshot, so a ``git pull`` that deleted a merged card, or a colleague
+        retiring it by hand, was silently undone by the next unrelated click.
+        """
+        card_id = self.new_card("One")
+        tokens = api.tokens_of(self.tx())
+        path = self.store.card_path(card_id)
+        tx = api.Tx(self.store, tokens=tokens)     # the read that earned the token
+        path.unlink()                              # deleted inside that window
+
+        with self.assertRaises(api.Conflict) as caught:
+            api.apply(self.store, {"op": "claim.create",
+                                   "args": {"id": card_id, "agent": "ada",
+                                            "paths": ["src/a.py"]}}, tx=tx)
+        self.assertEqual(caught.exception.paths, [card_id])
+        self.assertFalse(path.exists(), "a refused write resurrected the card")
 
 
 # --------------------------------------------------------------------------- #
@@ -446,6 +497,11 @@ class TestClaims(Ops):
 
         Silent widening means grigory edits ``docs/`` because ada's claim said
         ``src/**`` and then quietly became ``**`` — a collision nobody refused.
+
+        The refusal still has to say *whose* card it is. It used to answer
+        ``reason: "taken"`` under a line reading "WEB-1 is already yours", and a
+        caller branching on the reason abandoned a card mid-edit to go find other
+        work — the one action that loses it for real.
         """
         card_id = self.new_card("One")
         self.claim(card_id, "ada", "src/**")
@@ -453,6 +509,9 @@ class TestClaims(Ops):
         caught = self.expect(api.ClaimDenied, "claim.create", id=card_id, agent="ada",
                              paths="docs/x.py")
         self.assertIn("already yours", caught.lines[0])
+        self.assertEqual(caught.detail["reason"], "widens")
+        self.assertEqual(caught.detail["held"], ["src/**"])
+        self.assertIn(f"renew {card_id}", caught.lines[-1])
         self.assertEqual(self.card(card_id)["claim"]["paths"], ["src/**"])
         self.assertEqual(self.files(), before)
 
@@ -577,8 +636,7 @@ class TestClaims(Ops):
         board["boards"][0]["lease_ttl"] = "2h"
         self.store.write_board(board)
         slow = self.new_card("Long refactor")
-        self.assertEqual(model.iso(self.card(slow)["claim"]["expires"]) if False else
-                         self.claim(slow, "ada")["expires"],
+        self.assertEqual(self.claim(slow, "ada")["expires"],
                          model.iso(T0 + datetime.timedelta(hours=2)))
 
         quick = self.new_card("Quick")
@@ -643,6 +701,45 @@ class TestExpiry(Ops):
         self.assertFalse(entry["live"])
         self.assertEqual(summary["agents"], {})
         self.assertEqual(api.conflicts(self.tx()), [])
+
+    def test_freeing_an_expired_claim_needs_no_force_and_blames_nobody(self) -> None:
+        """A dead lease is not somebody's lock, so `released_by` stays absent.
+
+        Recording the recorder here would put a second name on a card that was
+        already free: ``released_by`` answers "who overrode a live claim", and
+        there was nothing to override. Reaching that branch needs holder and
+        releaser to differ *after* expiry, which no other test drives — the live
+        case raises, and a holder releasing their own lapsed lease never reaches
+        the comparison at all.
+        """
+        card_id = self.new_card("One")
+        self.claim(card_id, "ada")
+        self.clock.travel(minutes=31)
+
+        result = self.op("claim.release", id=card_id, agent="grigory")
+
+        self.assertEqual(result, {"id": card_id, "released": True, "was": "ada"})
+        card = self.card(card_id)
+        self.assertNotIn("claim", card)
+        self.assertNotIn("released_by", card,
+                         "a free card was written as if someone overrode a lease")
+        self.assertNotIn("assignee", card, "the expired holder is still on the card")
+
+    def test_overriding_a_live_claim_still_names_the_auditor(self) -> None:
+        """The counterpart: while the lease is live, --force must be attributable.
+
+        Without both halves the absence above is indistinguishable from the audit
+        trail silently going missing.
+        """
+        card_id = self.new_card("One")
+        self.claim(card_id, "ada")
+        self.expect(api.ClaimDenied, "claim.release", id=card_id, agent="grigory")
+
+        self.op("claim.release", id=card_id, agent="grigory", force=True)
+
+        card = self.card(card_id)
+        self.assertNotIn("claim", card)
+        self.assertEqual(card.get("released_by"), "grigory")
 
     def test_a_second_agent_takes_an_expired_card_and_records_the_preemption(self) -> None:
         """``preempted`` is the difference between a steal and a documented handover.
@@ -860,6 +957,58 @@ class TestDependencies(Ops):
         self.assertEqual(self.ready("grigory"), [dependent])
         self.assertIsNone(self.store.read_all().card(dependent).result)
 
+    def test_archiving_a_blocker_does_not_strand_the_card_behind_it(self) -> None:
+        """A retired blocker is not work anybody can still go and finish.
+
+        Deleting a blocker frees its dependents (above), but archiving one left
+        the edge intact, so the dependent read ``blocked`` forever while naming a
+        blocker the grid no longer draws — and ``conflicts --resolve`` settles
+        claims and names, never edges, so the board offered no repair. Retirement
+        settles the dependency at read time instead, which means
+        ``card.unarchive`` restores exactly the block that was there: the edge is
+        never edited, only re-read.
+        """
+        blocker, dependent = self.new_card("Blocker"), self.new_card("Dependent")
+        self.op("card.dep.add", id=dependent, blocked_by=blocker)
+        self.assertEqual(self.state(dependent, "grigory"), "blocked")
+
+        self.op("card.archive", id=blocker)
+        self.assertEqual(self.state(dependent, "grigory"), "ready")
+        self.assertEqual(self.ready("grigory"), [dependent])
+        self.assertEqual(self.card(dependent)["blocked_by"], [blocker],
+                         "settling must be a read-time fact, not an edited edge")
+
+        self.op("card.unarchive", id=blocker)
+        self.assertEqual(self.state(dependent, "grigory"), "blocked")
+        self.assertIn(f"waits on {blocker}", " ".join(
+            api.why_not_ready(self.tx(), self.tx().card(dependent), "grigory")))
+
+    def test_a_card_no_board_owns_is_reported_instead_of_bricking_every_read(self) -> None:
+        """One orphan file must not take the whole board down with it.
+
+        ``cards/OPS-1.yaml`` is what a merge produces when the OPS board was
+        deleted on the other clone. The store deliberately keeps unreadable and
+        unowned files so ``check`` can point at them, but the done-set was built
+        by asking each card's prefix for its home board and *raising* when there
+        wasn't one — inside the loop over every card. So ``show`` of a perfectly
+        healthy card, ``ready``, and ``check`` itself all died with
+        ``no board has its key``, which is the one report the tool cannot make
+        about itself.
+        """
+        healthy = self.new_card("Healthy")
+        orphan = self.store.cards_dir / "OPS-1.yaml"
+        orphan.write_text("id: OPS-1\ntitle: Orphan\ncolumn: backlog\n"
+                          "priority: none\narchived: false\n", encoding="utf-8")
+
+        tx = self.tx()
+        self.assertEqual(api.state_of(tx, tx.card(healthy), "grigory"), "ready")
+        self.assertEqual(self.ready("grigory"), [healthy])
+        self.assertIn("OPS", " ".join(tx.problems()),
+                      "the orphan has to be reported, not merely survived")
+        self.assertEqual(
+            [c["id"] for b in api.summary(tx)["doc"]["boards"] for c in b["cards"]],
+            [healthy])
+
 
 # --------------------------------------------------------------------------- #
 # cross-machine conflicts, and who wins
@@ -1015,6 +1164,49 @@ class TestCrossMachineConflicts(Ops):
         self.assertIn("working tree", dirty[0]["detail"])
         self.assertEqual(api.conflicts(self.tx(), ["docs/a.md", "README.md"]), [])
 
+    def test_a_claimants_own_worktree_is_not_reported_back_as_a_collision(self) -> None:
+        """Asked as ada, a dirty file under ada's claim is her progress, not a
+        collision — or the gate would be red forever.
+
+        `check` reports every live claim whose paths match uncommitted files. A
+        modified file cannot say who modified it, so this is the only reading
+        consistent with the spec's "modified by other work": claim a card for
+        `src/api/**`, edit a file under it, and `check --as ada` passes while CI
+        (no identity) still sees the overlap. Without the distinction the
+        everyday workflow fails the very gate that runs it, and nothing clears
+        it — `conflicts --resolve` has nothing to resolve.
+        """
+        card_id = self.new_card("Held")
+        self.claim(card_id, "ada", "src/api/**")
+        tree = ["src/api/routes.py"]
+
+        self.assertEqual([r["kind"] for r in api.conflicts(self.tx(), tree)],
+                         ["dirty"], "an unnamed asker sees every live claim")
+        self.assertEqual([r["agent"] for r in api.conflicts(self.tx(), tree, as_agent="grigory")],
+                         ["ada"], "a stranger's view is a gate's view")
+        self.assertEqual(api.conflicts(self.tx(), tree, as_agent="ada"), [],
+                         "ada's own claim, in her own paths, is her own work")
+
+    def test_only_my_own_claim_drops_out_of_my_view(self) -> None:
+        """Filtering is per claim, not all-or-nothing: asked as ada, her overlap
+        disappears and grigory's stays. Otherwise the report that exists to stop
+        two agents overwriting each other would go quiet the moment either of
+        them had an identity."""
+        mine = self.new_card("Mine")
+        theirs = self.new_card("Theirs")
+        self.claim(mine, "ada", "src/api/**")
+        self.claim(theirs, "grigory", "docs/**")
+        tree = ["src/api/routes.py", "docs/guide.md"]
+
+        self.assertEqual(sorted(r["agent"] for r in api.conflicts(self.tx(), tree)),
+                         ["ada", "grigory"], "an unnamed asker sees both")
+        as_ada = api.conflicts(self.tx(), tree, as_agent="ada")
+        self.assertEqual([(r["kind"], r["agent"]) for r in as_ada],
+                         [("dirty", "grigory")],
+                         "only ada's claim drops out, not the whole report")
+        self.assertEqual(as_ada[0]["files"], ["docs/guide.md"],
+                         "and what stays keeps naming the file to go look at")
+
 # --------------------------------------------------------------------------- #
 # a card whose filename and id disagree
 # --------------------------------------------------------------------------- #
@@ -1096,6 +1288,54 @@ class TestMisnamedCards(Ops):
             if report["kind"] == "misnamed":
                 self.assertFalse(report["fixable"], report)
 
+    def test_editing_a_card_cannot_overwrite_the_stranger_it_merged_onto(self) -> None:
+        """The sibling was proven before deletion; the target was not, once.
+
+        Two clones, one basename: `archive/WEB-1.yaml` declares `id: WEB-2` and
+        `cards/WEB-1.yaml` declares `id: WEB-1` and is flagged archived — the
+        residue of a merge that kept both copies of a card two people archived.
+        `conflicts` reports that pair and refuses to pick a winner, and the repair
+        honours the refusal. But the live card's own bytes already say
+        `archived: true`, so the next edit — a *title*, nothing to do with moving
+        — computed its home as `archive/WEB-1.yaml` and wrote straight over the
+        stranger. Editing a title must never delete another card.
+        """
+        live = self.new_card("Live")                       # cards/WEB-1.yaml
+        source = self.store.card_path(live)
+        source.write_text(
+            source.read_text(encoding="utf-8").replace("archived: false", "archived: true"),
+            encoding="utf-8")
+        squatter = self.store.card_path("WEB-1", archived=True)
+        squatter.write_text(
+            "id: WEB-2\ntitle: Somebody else's archived card\ncolumn: done\n"
+            "priority: low\narchived: true\n", encoding="utf-8")
+        before = squatter.read_bytes()
+
+        with self.assertRaises(ValidationError) as caught:
+            self.op("card.update", id=live, patch={"title": "Renamed by hand"})
+
+        errors = " ".join(caught.exception.errors)
+        self.assertIn("already holds", errors)
+        self.assertIn("conflicts", errors, "the refusal has to say where the fix lives")
+        self.assertEqual(squatter.read_bytes(), before,
+                         "editing one card deleted another")
+        self.assertEqual(self.card(live)["title"], "Live",
+                         "the refused write left a half-applied edit")
+
+    def test_archiving_a_card_still_moves_it_when_nothing_is_in_the_way(self) -> None:
+        """The guard's other side: an ordinary archive is not a collision.
+
+        Without this the refusal above is indistinguishable from archive being
+        broken, and the next person to touch the guard widens it.
+        """
+        card_id = self.new_card("Finished")
+        moved = self.op("card.archive", id=card_id)["moved"]
+
+        self.assertEqual(moved, f"{card_id}.yaml")
+        self.assertFalse((self.store.cards_dir / f"{card_id}.yaml").exists())
+        self.assertTrue((self.store.archive_dir / f"{card_id}.yaml").is_file())
+        self.assertEqual(self.card(card_id)["archived"], True)
+
     def test_two_files_one_id_are_both_visible_instead_of_one_appearing_twice(self) -> None:
         """Ordering card files by id used to collapse the pair into one handle.
 
@@ -1134,6 +1374,31 @@ class TestMisnamedCards(Ops):
         self.assertEqual(self.card("WEB-4")["id"], "WEB-4")
         self.assertEqual(self.card(third)["blocked_by"], ["WEB-4"])
 
+    def test_re_pointing_an_edge_keeps_the_line_the_author_wrote(self) -> None:
+        """Re-pointing swaps one id inside a list, so it must not re-render it.
+
+        The repair assigned a fresh ``list`` onto the loaded node, which is how a
+        board that read ``blocked_by: [WEB-1]  # until the API lands`` came back
+        as a three-line block with its comment gone: a whole-column reformat in
+        the diff of a card nobody edited by hand, and the one place a reviewer
+        wrote why the block exists.
+        """
+        second = self.new_card("Second")
+        third = self.new_card("Third", blocked_by=[second])
+        path = self.store.card_path(third)
+        path.write_text(
+            path.read_text(encoding="utf-8")
+                .replace(f"blocked_by:\n  - {second}", f"blocked_by: [{second}]  # why"),
+            encoding="utf-8")
+        self.assertIn(f"[{second}]  # why", path.read_text(encoding="utf-8"),
+                      "the fixture has to be the flow line a person would write")
+        self.store.card_path(second).rename(self.store.cards_dir / "WEB-4.yaml")
+
+        self.op("conflicts.resolve")
+        self.assertEqual(self.card(third)["blocked_by"], ["WEB-4"])
+        self.assertIn("blocked_by: [WEB-4]  # why", path.read_text(encoding="utf-8"),
+                      "id updated, formatting and comment left exactly as written")
+
 
 # --------------------------------------------------------------------------- #
 # the document the UI and the CLI both read
@@ -1149,7 +1414,7 @@ class TestSummary(Ops):
         """
         card_id = self.new_card("One")
         summary = api.summary(self.tx())
-        self.assertEqual(summary["schema_version"], model.VERSION == 2 and 2 or 0)
+        self.assertEqual(summary["schema_version"], model.VERSION)
         self.assertNotIn("rev", summary)
         self.assertNotIn("rev", summary["doc"])
         self.assertEqual(sorted(summary["tokens"]), sorted(["board", card_id]))
@@ -1211,12 +1476,10 @@ class TestOneCardPerFile(Ops):
         """
         mine, theirs = self.new_card("Mine"), self.new_card("Theirs")
         self.commit("two cards")
-        before = self.files()
         theirs_bytes = self.card_text(theirs)
 
         self.op("card.update", id=mine, patch={"priority": "urgent"})
         self.assertEqual(self.card(mine)["priority"], "urgent")
-        self.assertEqual(self.card(theirs), before and self.card(theirs))
         self.assertEqual(self.card_text(theirs), theirs_bytes)
         self.assertEqual([p for _, _, p in self.numstat()],
                          [".yamlboard/cards/WEB-1.yaml"])
@@ -1283,6 +1546,28 @@ class TestOneCardPerFile(Ops):
         self.op("card.unarchive", id=card_id)
         self.assertTrue((self.store.cards_dir / f"{card_id}.yaml").is_file())
         self.assertEqual(self.ready("grigory"), [card_id])
+
+    def test_an_archived_card_refuses_a_claim(self) -> None:
+        """A lease on retired work is invisible and blocking at once.
+
+        ``ready`` skips archived cards and the browser never draws one, so an
+        agent could not even see the card it had taken — yet the claim fenced its
+        paths from everybody else for the full TTL, and `conflicts` would name an
+        archived card as the winner. `claim` reached it anyway because
+        ``tx.card()`` searches archived cards too, which is right for the card
+        panel and wrong for a lease.
+        """
+        card_id = self.new_card("Retired")
+        self.op("card.archive", id=card_id, archived=True)
+        before = self.files()
+
+        caught = self.expect(api.ClaimDenied, "claim.create",
+                             id=card_id, agent="grigory", paths="src/api/**")
+        self.assertEqual(caught.detail["reason"], "archived")
+        self.assertIn("archived", caught.lines[0])
+        self.assertIn("card panel", caught.lines[1],
+                      "unarchiving has no CLI verb; the advice must say where to go")
+        self.assertEqual(self.files(), before, "a refusal must not move the file back")
 
     def test_dropping_a_person_clears_claims_before_the_board_forgets_them(self) -> None:
         """Cards are written first, ``board.yaml`` last, and the order is the safety.
@@ -1757,6 +2042,53 @@ class TestAntiDrift(unittest.TestCase):
         for phrase in ("bad argument", "refused operation"):
             self.assertIn(phrase, plain(skill[2]))
             self.assertIn(phrase, plain(epilog[2]))
+
+    def test_the_priority_vocabulary_matches_across_the_three_files(self) -> None:
+        """``model.PRIORITIES`` is the source; ``app.js`` and ``styles.css`` copy it.
+
+        A fifth priority added to the model only is a dropdown that cannot offer
+        it, and one added to ``app.js`` only is a card the validator refuses to
+        save. The CSS is the subtler half: a value with no ``--prio-*`` token
+        renders its left stripe ``transparent``, which reads as "no priority" —
+        a quiet wrong answer instead of a loud one.
+        """
+        static = Path(api.__file__).resolve().parent / "static"
+        js = (static / "app.js").read_text(encoding="utf-8")
+        css = (static / "styles.css").read_text(encoding="utf-8")
+
+        copied = re.search(r"const PRIORITIES = \[([^\]]*)\]", js)
+        self.assertIsNotNone(copied, "app.js no longer declares PRIORITIES")
+        listed = tuple(s.strip().strip('"') for s in copied.group(1).split(","))  # type: ignore[union-attr]
+        self.assertTrue(listed, "the pin would be vacuous against an empty list")
+        # app.js orders highest-first for its dropdowns; the model is lowest-first.
+        self.assertEqual(tuple(reversed(listed)), model.PRIORITIES)
+        self.assertTrue(listed[0] == "urgent" and listed[-1] == "none",
+                        "app.js reordered its copy away from the dropdown's contract")
+
+        painted = set(re.findall(r"--prio-([a-z]+):", css))
+        self.assertEqual(painted, set(model.PRIORITIES) - {"none"},
+                         "every priority except `none` needs a colour token in both themes")
+        self.assertNotIn("--prio-none:", css,
+                         "`none` is deliberately uncoloured; a token would draw a stripe")
+        # not vacuous: one token per theme, and a renamed value must fail
+        for name in painted:
+            self.assertEqual(len(re.findall(rf"--prio-{name}:", css)), 2,
+                             f"--prio-{name} is missing from one theme")
+        self.assertNotEqual(painted | {"blocker"}, set(model.PRIORITIES))
+
+    def test_the_field_types_the_browser_offers_are_the_ones_model_accepts(self) -> None:
+        """The "New field" dropdown lists types inline; ``model.FIELD_TYPES`` rules.
+
+        A type in the dropdown but not the model creates a field the validator
+        rejects on save; one in the model but not the dropdown is a field type
+        nobody can add from the browser, only by hand in the file.
+        """
+        js = (Path(api.__file__).resolve().parent / "static" / "app.js").read_text(encoding="utf-8")
+        offered = re.search(r'title: "New field type".*?\.\.\[([^\]]*)\]\.map', js, re.DOTALL)
+        self.assertIsNotNone(offered, "the field-type dropdown no longer lists inline")
+        listed = tuple(s.strip().strip('"') for s in offered.group(1).split(","))  # type: ignore[union-attr]
+        self.assertEqual(listed, model.FIELD_TYPES)
+        self.assertNotEqual(listed[:-1], model.FIELD_TYPES)
 
     def test_skill_install_ships_the_bytes_the_package_advertises(self) -> None:
         """``skill install`` copies the bundled file; a repo-relative copy drifts.

@@ -98,6 +98,14 @@ take it and, if not, why, in one call.
 - **WHEN** an agent asks about a specific card naming itself
 - **THEN** the reply states its state and, if it cannot be taken, the reason
 
+#### Scenario: The pre-flight agrees with the claim it predicts
+- **WHEN** an agent asks about a card and then attempts the claim that same question described
+- **THEN** both answer with the same exit status, and a card the caller already holds is reported as success with its renewal command — never as a refusal pointing at other work
+
+#### Scenario: A refused argument is refused the same way at both doors
+- **WHEN** the single-card question is given a path argument the claim would reject, such as a bare directory
+- **THEN** it exits with the refused-operation status and names the fix, not with the claim-denied status and not with a traceback
+
 ### Requirement: The verb surface
 The command line SHALL expose: initialising a store, serving the dashboard,
 creating a card, validating and summarising the store, showing one card, listing
@@ -137,3 +145,8 @@ store SHALL be refused rather than repeated.
 #### Scenario: Migrating twice
 - **WHEN** migration is run on a store already in the new format
 - **THEN** it is refused and nothing is overwritten
+
+#### Scenario: Merging a second file into a live board
+- **WHEN** migration runs with `--force` on a board that has changed shape since — a column or field definition its own cards use
+- **THEN** the cards and definitions the file brings are added, and the board keeps every column, people and field it already had
+- **AND** a card id present in both is refused with nothing written

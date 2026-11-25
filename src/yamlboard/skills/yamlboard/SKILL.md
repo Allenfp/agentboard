@@ -53,12 +53,19 @@ the point of the card.
 |130|interrupted|
 |141|pipe closed|
 
-**3 means someone else holds it.** Pick another card from `ready`. Never retry the same
-claim — the holder's lease has to expire first, and retrying does not make that happen
-sooner. There is no `--force` on `claim` because a claim you forced is a claim someone
-else is still working under. With `--json` the reason is one JSON document on stdout;
-without it the explanation is on stderr, and its last line is always a command you can
-run next.
+**3 usually means someone else holds it.** Pick another card from `ready`. Never retry
+the same claim — the holder's lease has to expire first, and retrying does not make that
+happen sooner. It can also mean the card is finished work, which no claim may reopen. There is no `--force` on `claim` because a claim you forced is a claim
+someone else is still working under. With `--json` the reason is one JSON document on
+stdout; without it the explanation is on stderr, and its last line is always a command
+you can run next.
+
+Two `reason` values mean something other than "walk away", so read the field rather
+than the code alone. `widens`: the card **is yours** and only the extra paths were
+refused — a footprint is a promise the board was already navigated against, so keep
+working inside it, or `renew` the lease you hold. `overridden`: a human settled an
+overlap against you, and `renew` will not hand the card back; only a fresh `claim`,
+after the winner's lease expires, can.
 
 ## Leases
 

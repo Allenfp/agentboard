@@ -13,8 +13,8 @@ claim:
   # A hand-written lease so a fresh clone shows what a live claim looks like.
   # It expires, the card goes back to `ready`, and that is the feature working.
   agent: ras
-  at: 2026-11-24T00:10:00
-  expires: 2026-11-25T00:10:00
+  at: 2026-11-25T09:20:00
+  expires: 2026-11-26T09:20:00
   paths:
     - docs/**
 archived: false

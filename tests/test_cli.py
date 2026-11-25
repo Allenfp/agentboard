@@ -1107,8 +1107,72 @@ class TestInspection(Board):
         # "already yours", not "taken by ada" — an agent that reads the latter
         # walks away from work it is entitled to continue.
         code, out, err = self.yb("show", one, "--as", "ada")
-        self.assertIn(f"{one} is already yours", err)
+        self.assertIn("already yours", out)
         self.assertNotIn("is taken", err)
+        # ... and the code agrees with `claim`, which answers 0 here with
+        # "nothing written". This used to answer 3 with "next: ready", so the
+        # cheap pre-flight told an agent to abandon a card it held.
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertNotIn("next: yamlboard ready", out)
+        self.assertIn(f"renew {one}", out)
+
+    def test_a_finished_card_refuses_a_claim_and_says_why(self) -> None:
+        """A lease on finished work fences files off the board for nobody.
+
+        ``ready`` has always left done-column cards out, and the browser paints
+        its takeable accent from that list — but ``claim`` took them anyway, so
+        an agent could win a card that is already merged and block its paths for
+        a full TTL. Reopening finished work is a person's decision, so the claim
+        refuses and says whose call it is, rather than naming a holder that does
+        not exist or offering the card as free.
+        """
+        card_id = self.create("Merged already")
+        self.assertEqual(self.yb("done", card_id, "--as", "ada")[0], cli.EXIT_OK)
+        before = self.card(card_id)
+
+        code, out, err = self.yb("claim", card_id, "--as", "grigory")
+        self.assertEqual(code, cli.EXIT_DENIED, err)
+        self.assertIn("finished work", err)
+        self.assertIn("Done", err, "the refusal must name where the card sits")
+        self.assertNotIn("grigory is already yours", err)
+        self.assertIn("next: yamlboard ready --as grigory", err)
+        self.assertNotIn("claim", self.card(card_id),
+                         "a refused claim must not leave a lease behind")
+        self.assertEqual(self.card(card_id), before, "a refusal must not edit the card")
+
+        # The pre-flight predicts exactly this, line for line.
+        shown = self.yb("show", card_id, "--as", "grigory")
+        self.assertEqual(shown[0], code,
+                         "`show` is sold as the cheap version of this question; "
+                         "a different answer is the bug that hid here once")
+        # `claim` prints the identity banner to stderr first and `show` does not,
+        # so compare the denial itself.
+        self.assertEqual([line for line in said(err) if line.strip() != "as grigory"],
+                         said(shown[2]),
+                         "the pre-flight must predict this refusal word for word")
+
+    def test_show_refuses_a_directory_argument_exactly_like_claim(self) -> None:
+        """A bare directory is the one trap ``--paths`` has, and both doors have
+        to refuse it the same way.
+
+        ``claim`` refuses it as a bad argument (exit 2, "write src/**"), because
+        a directory silently holds every file under it off the board. ``show``
+        reached the collision check first and answered 3 with "someone else has
+        these paths" — advice for a different question, and one an agent can
+        only follow by giving up on a card that was free.
+        """
+        free = self.create("Nobody has touched this")
+        code, out, err = self.yb("claim", free, "--as", "grigory", "--paths", "src")
+        self.assertEqual(code, cli.EXIT_USAGE, err)
+        self.assertIn("is a directory", err)
+
+        shown = self.yb("show", free, "--as", "grigory", "--paths", "src")
+        self.assertEqual(shown[0], cli.EXIT_USAGE,
+                         "a bad argument must not wear the claim-denied code: "
+                         "3 tells an agent to go find other work")
+        self.assertIn("is a directory", shown[2])
+        self.assertNotIn("your paths collide", shown[2])
+        self.assertNotIn("Traceback", shown[2])
 
     def test_list_reports_a_card_i_hold_as_yours_not_taken(self) -> None:
         """``list`` and ``show`` agree on the four-word vocabulary or an agent
@@ -1752,23 +1816,42 @@ boards:
         self.assertEqual(arrived.read_card("PROD-6").doc["title"],
                          "retired work rewritten after the migration")
 
-    def test_merging_a_different_files_cards_still_works(self) -> None:
+    def test_merging_into_a_live_board_keeps_what_the_board_added_since(self) -> None:
         """The guard is about ids, not about making ``--force`` useless: pulling
         a second legacy file into a board that already has cards of its own is
         the case the flag exists for.
+
+        "Keeps what is already here" has to mean the board's shape as much as its
+        cards. ``columns`` and ``custom_fields`` used to be assigned wholesale, so
+        a lane the board had added after the migration was replaced by whatever
+        the v1 file named: with a card in it, validation caught that card pointing
+        at a missing column and the whole migration died; with no card in it yet,
+        the lane just disappeared at exit 0, and only a tour of Settings showed a
+        column had gone missing from a board nobody said to re-shape.
         """
         # The fixture's board is keyed WEB, so the second file is rewritten to
         # that key: a key mismatch is refused by a different guard entirely (it
         # would orphan every id the store already has), which is not this test.
         other = Path(self._tmp.name) / "legacy.yaml"
         other.write_text(self.V1.replace("key: PROD", "key: WEB")
-                         .replace("PROD-1", "WEB-40").replace("PROD-6", "WEB-41"),
+                         .replace("PROD-1", "WEB-40").replace("PROD-6", "WEB-41")
+                         .replace("    custom_fields:",
+                                  "      - id: audit\n        name: Audit\n"
+                                  "    custom_fields:"),
                          encoding="utf-8")
+        doc = self.store.read_board().doc
+        doc["boards"][0]["columns"].append({"id": "review", "name": "Review"})
+        self.store.write_board(doc)
+
         code, out, err = self.yb("migrate", str(other), "--dir", str(self.repo),
                                 "--force")
         self.assertEqual(code, cli.EXIT_OK, err)
         self.assertIn("2 card(s)", out)
         self.assertEqual(self.store.read_card("WEB-40").doc["title"], "Ship the API")
+
+        columns = [c["id"] for c in model.columns(self.store.read_board().doc["boards"][0])]
+        self.assertIn("review", columns, "the board's own lane was overwritten by v1")
+        self.assertIn("audit", columns, "and the migrated file's own lane must arrive too")
 
     def test_migrating_twice_without_force_is_refused_before_anything_is_read(self) -> None:
         """A different promise from the one above: that guards a card inside a

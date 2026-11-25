@@ -216,6 +216,37 @@ class TestLeaseLiveness(Base):
         self.assertTrue(model.claim_live(written, at=T0))
         self.assertEqual(model.ttl_left(written, at=T0), 1800)
 
+    def test_one_instant_written_at_two_offsets_means_the_same_thing(self) -> None:
+        """A UTC-spelling teammate must not hand the board a different lease.
+
+        ``validate`` accepts a naive *or* an aware stamp, because files are the
+        arbiter and a person may write either. So an offset has to be honoured,
+        not dropped: the two spellings of one moment -- noon in Kolkata and
+        06:30 UTC -- are the same instant, but reading them by truncating the
+        offset leaves ``12:00`` and ``06:30``, five and a half hours apart. That
+        is a lease five and a half hours longer on one clone than the other: the
+        same card,
+        fenced for hours after its holder stopped, or freed hours early -- and a
+        CI job running in UTC sees one spelling and passes.
+        """
+        kolkata = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        utc_noon = T0.replace(tzinfo=kolkata)            # noon +05:30...
+        same_instant = utc_noon.astimezone(datetime.timezone.utc)   # ...is 06:30Z
+        self.assertNotEqual(str(utc_noon), str(same_instant),
+                            "the fixture must be two spellings, not one")
+
+        left, right = model.instant(utc_noon), model.instant(same_instant)
+        self.assertIsNotNone(left)
+        self.assertIsNone(left.tzinfo, "lease maths reads against naive now()")
+        self.assertEqual(left, right,
+                         "one instant read differently depending on how it was spelled")
+        # and a lease built from either spelling is the same 30 minutes of card
+        for aware in (utc_noon, same_instant):
+            self.assertEqual(
+                model.ttl_left({"agent": "ada", "expires": aware + MINUTE * 30},
+                               at=model.instant(aware)),
+                1800, f"{aware.isoformat()} was not 30 minutes of lease")
+
     def test_a_claim_with_no_agent_or_no_expiry_is_no_claim(self) -> None:
         """A claim with no ``expires`` must not read as one that never ends.
 
@@ -473,11 +504,25 @@ class TestPathOverlap(Base):
         ``src\\api\\**`` typed in a Windows shell and ``src/api/**/`` mean the
         same claim, and refusing them would only teach agents to distrust the
         tool and quote their paths oddly.
+
+        ``./src/**`` belongs in that set for a reason past tidiness: overlap is
+        decided segment by segment, so a leading ``.`` makes it read as disjoint
+        from a live ``src/**`` and hands two agents the same tree.
         """
         self.assertEqual(model.normalize_pattern("  src/api/**  "), "src/api/**")
         self.assertEqual(model.normalize_pattern("src/api/**/"), "src/api/**")
         self.assertEqual(model.normalize_pattern("src\\api\\routes.py"), "src/api/routes.py")
-        self.assertEqual(model.normalize_pattern("./README.md"), "./README.md")
+        self.assertEqual(model.normalize_pattern("./README.md"), "README.md")
+        self.assertEqual(model.normalize_pattern("./src//api/**"), "src/api/**")
+
+    def test_a_dot_prefixed_glob_collides_with_the_plain_spelling(self) -> None:
+        """The overlap consequence, stated where it can actually be felt.
+
+        Two claims of one tree, one typed by shell completion, must not both be
+        accepted -- the refusal is the whole product.
+        """
+        self.assertTrue(model.patterns_overlap("./src/api/**", "src/api/**"))
+        self.assertTrue(model.patterns_overlap("src/api/**", "./src/api/routes.py"))
 
     def test_an_unsafe_pattern_already_in_a_file_is_a_read_error(self) -> None:
         """The store-side teeth: validation, not just the CLI's argument check.

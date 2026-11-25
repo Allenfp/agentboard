@@ -86,6 +86,26 @@ ready card SHALL read as takeable by comparison.
 - **WHEN** a card is blocked by two unfinished cards
 - **THEN** the tile is dimmed and names both blockers
 
+#### Scenario: Finished work is not offered
+- **WHEN** a card sits in a done column, unclaimed with nothing left to wait for
+- **THEN** it carries no takeable accent, because the ready list leaves it out even
+  though the four-word state vocabulary has no separate word for finished
+
+### Requirement: A rebuild keeps the person where they were
+Any change that rebuilds the board or the open card — a poll reporting another
+writer, an op run from inside the card — SHALL return focus to the control or tile
+the person was on, or to the panel itself when that control no longer exists. It
+SHALL NOT fall back to a text field, where the next keystroke would edit the card
+rather than navigate.
+
+#### Scenario: Tabbing while agents work
+- **WHEN** a keyboard user has a card tile focused and another writer changes any file
+- **THEN** the tile is still focused afterwards, and the next Tab moves one card along
+
+#### Scenario: A claim from inside the card
+- **WHEN** a person claims a card from its own modal and then types
+- **THEN** the keystrokes go where focus was before the claim, and the title is unchanged
+
 ### Requirement: A human can perform the same coordination
 The dashboard SHALL let a person take, release and resolve work, choosing the agent
 from the board's people list rather than typing a name. Such actions SHALL use the

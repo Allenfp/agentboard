@@ -82,6 +82,12 @@ class TestClientBehaviour(unittest.TestCase):
         claim = self.obs["claim_only"]
         self.assertEqual(claim["claims"], ["WEB-1"])
         self.assertEqual(claim["content"], [])
+        # The whole point of the `claims` bucket is the per-chip repaint path. If
+        # a lease still forces a rebuild, `paintClaimed` is dead code and every
+        # agent's `renew` rebuilds the board out from under the reader — wiping
+        # the tile keyboard focus is standing on and any half-selected sentence.
+        self.assertFalse(claim["rebuild"],
+                         "a lease-only poll rebuilt the board instead of repainting one chip")
 
     def test_a_poll_carrying_a_lease_and_an_edit_reports_the_edit(self) -> None:
         """The coarser answer wins. A card both claimed and hand-edited between
@@ -228,6 +234,28 @@ class TestClientBehaviour(unittest.TestCase):
         self.assertTrue(modal["pathsKept"], "the paths input was replaced on repaint")
         self.assertEqual(modal["pathsValue"], "src/api/**")
 
+    def test_a_rebuild_does_not_move_the_keyboard(self) -> None:
+        """An agent renews a lease, the poll rebuilds the board, and a person
+        tabbing through cards loses their place: the next Tab restarts at the top
+        of the page. On a tile they had focused with Enter it also means the card
+        they were about to open is no longer under the cursor.
+        """
+        seen = self.obs["focus_survives_rebuild"]
+        self.assertNotIn("error", seen, seen.get("error"))
+        self.assertEqual(seen["before"], "WEB-2")
+        self.assertEqual(seen["after"], "WEB-2",
+                         "a rebuild threw away the focused tile")
+
+    def test_finished_work_is_not_accented_as_takeable(self) -> None:
+        """The four-word state vocabulary has no word for finished, so a card in
+        a done column answers "ready" while the ready list leaves it out. The
+        accent must follow the list, or the board invites an agent to reopen work
+        somebody already shipped.
+        """
+        seen = self.obs["finished_is_not_accented"]
+        self.assertTrue(seen["open"], "the open card lost its takeable accent")
+        self.assertFalse(seen["done"], "a card in the done column reads as takeable")
+
 
 @needs_node
 class TestTheHarnessItself(unittest.TestCase):
@@ -312,8 +340,7 @@ class TestClientContracts(unittest.TestCase):
         chosen against.
         """
         self.assertIn("--claim:", self.css)
-        dark = self.css[self.css.index('[data-theme="dark"]")'):] if False else \
-            self.css[self.css.index('[data-theme="dark"]'):]
+        dark = self.css[self.css.index('[data-theme="dark"]'):]
         self.assertIn("--claim:", dark, "--claim is missing from the dark theme")
         light = self.css[:self.css.index('[data-theme="dark"]')]
         for block, label in ((light, "light"), (dark[:dark.index("}")] + "}", "dark")):

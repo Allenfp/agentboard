@@ -20,8 +20,8 @@ claim:
   # A hand-written lease so a fresh clone shows what a live claim looks like.
   # It expires, the card goes back to `ready`, and that is the feature working.
   agent: grigory
-  at: 2026-11-24T00:52:00
-  expires: 2026-11-25T00:52:00
+  at: 2026-11-25T09:30:00
+  expires: 2026-11-26T09:30:00
   paths:
     - src/api/routes.py
   note: one file, but it sits inside ada's tree; see conflicts

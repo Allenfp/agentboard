@@ -28,6 +28,7 @@ htmlcov/
 # silently untracking the board.
 **/.yamlboard/.lock
 **/.yamlboard/.tmp-*.yaml
+**/.yamlboard/**/*.tmp-*.yaml
 
 # editors / os
 .DS_Store
