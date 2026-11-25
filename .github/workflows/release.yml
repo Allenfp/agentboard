@@ -64,11 +64,19 @@ jobs:
       # asset on the release is what the tag promised can check instead of trust.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
 
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
-          files: dist/*
+          # Not `dist/*`: the build back end writes a `dist/.gitignore` holding
+          # one `*`, the action uploads dotfiles, and an asset with no basename
+          # arrives named `default.gitignore`. An artifact nobody asked for is
+          # worse than a glob that needs widening when a third format lands.
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
