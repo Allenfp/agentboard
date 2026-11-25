@@ -29,8 +29,10 @@ data in the board configuration file.
 
 ### Requirement: Card files are named by card id
 Each card file SHALL be named after the card's id, so a card's identity and its
-path are the same fact. Archiving a card SHALL move its file into the archive
-directory, which git records as a rename.
+path are the same fact. Where the two disagree, the filename is authoritative and
+the declared id SHALL be corrected to match it, rather than the file renamed to
+match the id. Archiving a card SHALL move its file into the archive directory,
+which git records as a rename.
 
 #### Scenario: Archiving is a rename
 - **WHEN** a card is archived
@@ -39,6 +41,10 @@ directory, which git records as a rename.
 #### Scenario: Two cards archived concurrently
 - **WHEN** two clones archive two different cards and merge
 - **THEN** git merges without a textual conflict
+
+#### Scenario: Repair chooses the filename over the id
+- **WHEN** `cards/WEB-9.yaml` declares `id: WEB-1`
+- **THEN** the repair rewrites the id to `WEB-9` and the file keeps its path
 
 ### Requirement: No board-wide revision counter
 The system SHALL NOT maintain a board-wide write counter. Two writes to different
@@ -74,8 +80,12 @@ hand-written id is never re-issued.
 - **THEN** the next minted id is 10
 
 #### Scenario: Two clones mint the same id
-- **WHEN** two clones each create a card at the same number and merge, producing two files with the same name
-- **THEN** the duplicate is reported as a conflict and neither card is silently renumbered or dropped
+- **WHEN** two clones each create a card at the same number and merge
+- **THEN** the duplicate is reported as a conflict and nothing changes until a human resolves it
+
+#### Scenario: Merging two copies of one filename
+- **WHEN** the conflict on a card file is settled by keeping both copies, so one sits on a borrowed name
+- **THEN** the naming fault is reported, and any renumbering happens only through the explicit resolve that names the file and the id it takes
 
 ### Requirement: Transient files stay untracked
 The lock file and interrupted-write temporary files the system creates inside the
@@ -131,3 +141,12 @@ store twice SHALL produce the same order.
 #### Scenario: Ordering stays possible after many inserts
 - **WHEN** a card is inserted between two neighbours with no free position left between them
 - **THEN** the store renumbers the affected column and the requested order is preserved
+
+### Requirement: One id in two files stays two files
+Resolving a card by id internally SHALL NOT collapse two card files that declare
+the same id into one. While the disagreement exists, every card file in the store
+SHALL stay visible in listing and in the conflict report.
+
+#### Scenario: Two files declare one id
+- **WHEN** a store holds two card files declaring the same id
+- **THEN** both files appear in listing and in the conflict report, not one twice

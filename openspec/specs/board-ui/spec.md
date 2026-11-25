@@ -109,3 +109,17 @@ being watched and report how many agents hold work and how many conflicts are op
 #### Scenario: An empty board is not a dead end
 - **WHEN** a person opens a freshly initialised board
 - **THEN** the empty state names both creating a card and installing the agent skill
+
+### Requirement: A fixable report carries its own action
+A conflict report the tool can settle by itself — a card whose id disagrees with its
+filename — SHALL carry that action in the conflict view rather than advice alone. The
+control's label SHALL name the action the tool actually performs, so it never promises
+a file move that does not happen.
+
+#### Scenario: A naming fault is fixable from the view
+- **WHEN** the conflict view lists a card whose id disagrees with its filename
+- **THEN** the row names the file and the id it takes, and its control applies the repair without moving the file
+
+#### Scenario: An unfixable report offers nothing
+- **WHEN** the conflict view lists two files that cannot both keep one name
+- **THEN** the row names both files and has no action that would discard either
